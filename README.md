@@ -1,11 +1,43 @@
-# React + TypeScript + Vite
+# TempusAI
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Monorepo for TempusAI — your intelligent scheduling assistant.
 
-Currently, two official plugins are available:
+## Project Structure
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+```
+tempusai/
+├── frontend/   # React + TypeScript + Vite frontend
+├── backend/    # Backend service (not yet implemented)
+└── package.json # Root scripts for managing both projects
+```
+
+## Getting Started
+
+### Install all dependencies
+
+```bash
+npm run install:all
+```
+
+### Run the frontend
+
+```bash
+npm run frontend:dev
+```
+
+### Run tests
+
+```bash
+npm run test
+```
+
+## Frontend
+
+See [frontend/README.md](frontend/README.md) for frontend-specific documentation.
+
+## Backend
+
+See [backend/README.md](backend/README.md) for backend-specific documentation.
 
 ## React Compiler
 
