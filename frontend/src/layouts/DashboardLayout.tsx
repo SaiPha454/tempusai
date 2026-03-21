@@ -7,8 +7,8 @@ export function DashboardLayout() {
   const location = useLocation();
 
   return (
-    <div className="min-h-screen bg-[#F9FAFB] text-slate-900">
-      <div className="flex w-full min-h-screen">
+    <div className="h-screen overflow-hidden bg-[#F9FAFB] text-slate-900">
+      <div className="flex h-full w-full overflow-hidden">
         <Sidebar
           brand="TempusAI"
           items={[
@@ -33,7 +33,7 @@ export function DashboardLayout() {
           ]}
         />
 
-        <main className="flex-1 px-7 py-8">
+        <main className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-7 py-8">
           <Outlet />
         </main>
       </div>

@@ -15,7 +15,7 @@ type SidebarProps = {
 
 export function Sidebar({ brand, items }: SidebarProps) {
   return (
-    <aside className="sticky top-0 h-screen w-64 border-r border-slate-200 bg-white px-5 py-7">
+    <aside className="h-screen w-64 shrink-0 overflow-hidden border-r border-slate-200 bg-white px-5 py-7">
       <p className="text-lg font-semibold text-[#0A64BC]">{brand}</p>
 
       <nav className="mt-8 space-y-1">

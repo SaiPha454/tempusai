@@ -6,6 +6,7 @@ type RoomSelectorProps = {
   filteredRooms: string[];
   selectedRooms: string[];
   onToggleRoom: (room: string) => void;
+  roomCapacityMap?: Record<string, number>;
 };
 
 export function RoomSelector({
@@ -14,6 +15,7 @@ export function RoomSelector({
   filteredRooms,
   selectedRooms,
   onToggleRoom,
+  roomCapacityMap,
 }: RoomSelectorProps) {
   return (
     <div className="space-y-3">
@@ -49,6 +51,11 @@ export function RoomSelector({
                     className="h-4 w-4 rounded border-slate-300 text-[#0A64BC] focus:ring-[#0A64BC]/30"
                   />
                   <span>{room}</span>
+                  {roomCapacityMap?.[room] ? (
+                    <span className="ml-auto rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-500">
+                      {roomCapacityMap[room]} seats
+                    </span>
+                  ) : null}
                 </label>
               );
             })}
