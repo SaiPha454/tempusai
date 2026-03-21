@@ -17,6 +17,7 @@ import {
   professorDirectory,
   roomDirectory,
   semesterOptions,
+  studyProgramOptions,
   weekdays,
   yearOptions,
   type CourseOption,
@@ -31,6 +32,7 @@ type CourseForm = {
 
 type AddedCourse = {
   id: string;
+  studyProgram: string;
   courseCode: string;
   courseName: string;
   year: string;
@@ -56,6 +58,7 @@ const initialForm: CourseForm = {
 
 export function SchedulingManagerPage() {
   const [activeTab, setActiveTab] = useState<(typeof schedulingTabs)[number]>('Schedule Class');
+  const [selectedStudyProgram, setSelectedStudyProgram] = useState('');
   const [courseQuery, setCourseQuery] = useState('');
   const [selectedCourse, setSelectedCourse] = useState<CourseOption | null>(null);
   const [courseForm, setCourseForm] = useState<CourseForm>(initialForm);
@@ -121,6 +124,7 @@ export function SchedulingManagerPage() {
 
     const course: AddedCourse = {
       id: crypto.randomUUID(),
+      studyProgram: selectedStudyProgram,
       courseCode: selectedCourse.code,
       courseName: selectedCourse.name,
       year: courseForm.year,
@@ -158,6 +162,7 @@ export function SchedulingManagerPage() {
 
   const hasValidCapacity = Number(courseForm.studentCapacity) > 0;
   const canAddCourse =
+    Boolean(selectedStudyProgram) &&
     Boolean(selectedCourse) &&
     Boolean(courseForm.year) &&
     Boolean(courseForm.semester) &&
@@ -182,6 +187,19 @@ export function SchedulingManagerPage() {
 
       {activeTab === 'Schedule Class' && (
         <div className="mt-6 space-y-6 pb-8">
+          <Card title="Study Program">
+            <div className="max-w-md">
+              <SelectField
+                value={selectedStudyProgram}
+                onChange={setSelectedStudyProgram}
+                options={studyProgramOptions}
+              />
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              Selected study program applies to all courses you add here.
+            </p>
+          </Card>
+
           <Card title="Course Information" icon={CalendarDays}>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <CourseSelectField
@@ -303,6 +321,9 @@ export function SchedulingManagerPage() {
                   <CourseItem
                     key={course.id}
                     order={index + 1}
+                    studyProgram={
+                      studyProgramOptions.find((item) => item.value === course.studyProgram)?.label ?? 'N/A'
+                    }
                     courseCode={course.courseCode}
                     courseName={course.courseName}
                     year={course.year}

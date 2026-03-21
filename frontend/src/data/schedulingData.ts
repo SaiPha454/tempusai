@@ -32,6 +32,16 @@ export const preferredTimeOptions: SelectOption[] = [
   { value: 'evening', label: 'Evening (4:30 PM - 7:30 PM)' },
 ];
 
+export const studyProgramOptions: SelectOption[] = [
+  { value: '', label: 'Select study program' },
+  { value: 'software-engineering', label: 'Software Engineering' },
+  { value: 'computer-science', label: 'Computer Science' },
+  { value: 'information-technology', label: 'Information Technology' },
+  { value: 'data-science', label: 'Data Science' },
+  { value: 'artificial-intelligence', label: 'Artificial Intelligence' },
+  { value: 'cybersecurity', label: 'Cybersecurity' },
+];
+
 export const professorDirectory = [
   'Prof. Anan Chaiyasit',
   'Prof. Narin Rattanakul',

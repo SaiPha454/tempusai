@@ -2,6 +2,7 @@ import { CalendarDays, Clock3, GraduationCap, Trash2, UserRound, Users } from 'l
 
 type CourseItemProps = {
   order: number;
+  studyProgram: string;
   courseCode: string;
   courseName: string;
   year: string;
@@ -15,6 +16,7 @@ type CourseItemProps = {
 
 export function CourseItem({
   order,
+  studyProgram,
   courseCode,
   courseName,
   year,
@@ -40,6 +42,10 @@ export function CourseItem({
             <p className="inline-flex items-center gap-1.5">
               <GraduationCap size={14} className="text-slate-500" />
               {year && semester ? `Year ${year}, Semester ${semester}` : 'Year/Semester N/A'}
+            </p>
+            <p className="inline-flex items-center gap-1.5">
+              <GraduationCap size={14} className="text-slate-500" />
+              {studyProgram}
             </p>
             <p className="inline-flex items-center gap-1.5">
               <Users size={14} className="text-slate-500" />
