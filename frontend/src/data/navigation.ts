@@ -4,4 +4,4 @@ export const sidebarRoutes = [
   { label: 'Resources', path: '/resources' },
 ] as const;
 
-export const schedulingTabs = ['Schedule Class', 'Schedule Exam', 'Custom Events'] as const;
+export const schedulingTabs = ['Schedule Class', 'Schedule Exam'] as const;

@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Plus, X } from 'lucide-react';
+import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
 import clsx from 'clsx';
 import { Tabs } from '../components/Tabs';
 import { Card } from '../components/Card';
@@ -508,14 +508,6 @@ export function SchedulingManagerPage() {
   const canGenerateExamSchedule =
     examProgramPlans.length > 0 && globalExamDates.length > 0 && globalExamSelectedRooms.length > 0;
 
-  const renderTabPlaceholder = (title: string, description: string) => (
-    <div className="mt-6">
-      <Card title={title} icon={ClipboardList}>
-        <p className="text-sm text-slate-600">{description}</p>
-      </Card>
-    </div>
-  );
-
   return (
     <>
       <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Scheduling Manager</h1>
@@ -1023,11 +1015,6 @@ export function SchedulingManagerPage() {
         </div>
       )}
 
-      {activeTab === 'Custom Events' &&
-        renderTabPlaceholder(
-          'Custom Events Page',
-          'This page is a placeholder for future Custom Events design and implementation.',
-        )}
     </>
   );
 }
