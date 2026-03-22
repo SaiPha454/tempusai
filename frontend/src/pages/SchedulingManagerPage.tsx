@@ -31,7 +31,8 @@ import {
   type CourseOption,
   type SelectOption,
 } from '../data/schedulingData';
-import { schedulingTabs } from '../data/navigation';
+
+const schedulingTabs = ['Schedule Class', 'Schedule Exam'] as const;
 
 type CourseForm = {
   year: string;

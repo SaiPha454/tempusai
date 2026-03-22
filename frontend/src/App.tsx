@@ -4,14 +4,20 @@ import { ChatPage } from './pages/ChatPage';
 import { ResourcesPage } from './pages/ResourcesPage';
 import { SchedulingManagerPage } from './pages/SchedulingManagerPage';
 
+const routes = {
+  chat: '/chat',
+  schedulingManager: '/scheduling-manager',
+  resources: '/resources',
+} as const;
+
 export default function App() {
   return (
     <Routes>
       <Route element={<DashboardLayout />}>
-        <Route path="/" element={<Navigate to="/scheduling-manager" replace />} />
-        <Route path="/chat" element={<ChatPage />} />
-        <Route path="/scheduling-manager" element={<SchedulingManagerPage />} />
-        <Route path="/resources" element={<ResourcesPage />} />
+        <Route path="/" element={<Navigate to={routes.schedulingManager} replace />} />
+        <Route path={routes.chat} element={<ChatPage />} />
+        <Route path={routes.schedulingManager} element={<SchedulingManagerPage />} />
+        <Route path={routes.resources} element={<ResourcesPage />} />
       </Route>
     </Routes>
   );
