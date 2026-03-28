@@ -14,8 +14,9 @@ type RoomsSectionProps = {
   roomCapacityInput: string;
   setRoomCapacityInput: React.Dispatch<React.SetStateAction<string>>;
   canAddRoom: boolean;
+  onAddRoom: () => void;
+  onRemoveRoom: (id: string) => void;
   setRooms: Dispatch<SetStateAction<RoomResource[]>>;
-  generateId: () => string;
   toRoomName: (value: string) => string;
   sortedRooms: RoomResource[];
   roomSuggestions: string[];
@@ -34,8 +35,9 @@ export function RoomsSection({
   roomCapacityInput,
   setRoomCapacityInput,
   canAddRoom,
+  onAddRoom,
+  onRemoveRoom,
   setRooms,
-  generateId,
   toRoomName,
   sortedRooms,
   roomSuggestions,
@@ -97,19 +99,7 @@ export function RoomsSection({
           />
           <button
             type="button"
-            onClick={() => {
-              if (!canAddRoom) return;
-              setRooms((prev) => [
-                ...prev,
-                {
-                  id: generateId(),
-                  name: toRoomName(roomNameInput.trim()),
-                  capacity: roomCapacityInput.trim(),
-                },
-              ]);
-              setRoomNameInput('');
-              setRoomCapacityInput('');
-            }}
+            onClick={onAddRoom}
             disabled={!canAddRoom}
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#0A64BC] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#0959A8] disabled:cursor-not-allowed disabled:bg-slate-300"
           >
@@ -155,7 +145,7 @@ export function RoomsSection({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setRooms((prev) => prev.filter((item) => item.id !== room.id))}
+                    onClick={() => onRemoveRoom(room.id)}
                     className="inline-flex h-8 w-8 items-center justify-center rounded text-rose-700 transition hover:bg-rose-50"
                     aria-label="Remove room"
                   >

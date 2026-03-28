@@ -12,14 +12,12 @@ type ProgramsSectionProps = {
   setProgramNameInput: React.Dispatch<React.SetStateAction<string>>;
   canAddProgram: boolean;
   programs: ProgramResource[];
-  setPrograms: React.Dispatch<React.SetStateAction<ProgramResource[]>>;
-  generateId: () => string;
   toTitleCase: (value: string) => string;
-  toProgramValue: (label: string) => string;
   showProgramSuggestions: boolean;
   programSuggestions: string[];
   setIsProgramNameFocused: React.Dispatch<React.SetStateAction<boolean>>;
   isProgramAlreadyExists: boolean;
+  onAddProgram: () => void;
   onOpenProgramDetail: (program: ProgramResource) => void;
 };
 
@@ -28,14 +26,12 @@ export function ProgramsSection({
   setProgramNameInput,
   canAddProgram,
   programs,
-  setPrograms,
-  generateId,
   toTitleCase,
-  toProgramValue,
   showProgramSuggestions,
   programSuggestions,
   setIsProgramNameFocused,
   isProgramAlreadyExists,
+  onAddProgram,
   onOpenProgramDetail,
 }: ProgramsSectionProps) {
   return (
@@ -76,14 +72,7 @@ export function ProgramsSection({
         </div>
         <button
           type="button"
-          onClick={() => {
-            if (!canAddProgram) return;
-            const normalizedLabel = toTitleCase(programNameInput.trim());
-            const value = toProgramValue(normalizedLabel);
-            if (programs.some((item) => item.value === value)) return;
-            setPrograms((prev) => [...prev, { id: generateId(), value, label: normalizedLabel }]);
-            setProgramNameInput('');
-          }}
+          onClick={onAddProgram}
           disabled={!canAddProgram}
           className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#0A64BC] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#0959A8] disabled:cursor-not-allowed disabled:bg-slate-300"
         >

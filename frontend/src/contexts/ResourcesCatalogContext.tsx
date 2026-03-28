@@ -1,6 +1,21 @@
-import { createContext, useContext, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
-import { dummyProgramYearPlans } from '../data/programYearPlansDummy';
-import { examSubjectCatalog, professorDirectory, studyProgramOptions, weekdays } from '../data/schedulingData';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from 'react';
+import {
+  listCourses,
+  listProgramYearRows,
+  listPrograms,
+  listProfessors,
+  listTimeslots,
+  type ProgramYearRowDto,
+} from '../api/resources';
 
 export type ProgramResource = { id: string; value: string; label: string };
 export type CourseResource = {
@@ -38,48 +53,84 @@ type ResourcesCatalogContextValue = {
 
 const ResourcesCatalogContext = createContext<ResourcesCatalogContextValue | undefined>(undefined);
 
-const generateId = () => crypto.randomUUID();
-const baseSlotLabels = ['9:00 AM - 12:00 PM', '1:00 PM - 4:00 PM', '4:30 PM - 7:30 PM'];
+const createBaseYearPlans = (): ProgramYearPlan[] =>
+  [1, 2, 3, 4].map((year) => ({ year, courses: [] }));
+
+const mapProgramYearRowsToPlans = (rows: ProgramYearRowDto[]): ProgramYearPlansByProgram => {
+  const grouped = rows.reduce<Record<string, ProgramYearPlan[]>>((acc, row) => {
+    if (!acc[row.program_value]) {
+      acc[row.program_value] = createBaseYearPlans();
+    }
+
+    const yearPlan = acc[row.program_value].find((item) => item.year === row.year);
+    if (yearPlan) {
+      yearPlan.courses.push({
+        id: row.id,
+        code: row.course_code,
+        name: row.course_name,
+        professorName: row.professor_name ?? '',
+      });
+    }
+
+    return acc;
+  }, {});
+
+  return grouped;
+};
 
 export function ResourcesCatalogProvider({ children }: { children: ReactNode }) {
-  const [programs, setPrograms] = useState<ProgramResource[]>(
-    studyProgramOptions
-      .filter((option) => option.value)
-      .map((option) => ({ id: generateId(), value: option.value, label: option.label })),
-  );
+  const [programs, setPrograms] = useState<ProgramResource[]>([]);
+  const [courses, setCourses] = useState<CourseResource[]>([]);
+  const [professors, setProfessors] = useState<ProfessorResource[]>([]);
+  const [timeslots, setTimeslots] = useState<TimeslotResource[]>([]);
+  const [programYearPlans, setProgramYearPlans] = useState<ProgramYearPlansByProgram>({});
 
-  const [courses, setCourses] = useState<CourseResource[]>(
-    examSubjectCatalog.slice(0, 12).map((course) => ({
-      id: generateId(),
-      code: course.code,
-      name: course.name,
-      studyProgram: course.studyProgram,
-    })),
-  );
+  useEffect(() => {
+    let isMounted = true;
 
-  const [professors, setProfessors] = useState<ProfessorResource[]>(
-    professorDirectory.slice(0, 6).map((name) => ({ id: generateId(), name, availableSlotIds: [] })),
-  );
+    const loadCatalog = async () => {
+      try {
+        const [programList, courseList, professorList, timeslotList, planRows] = await Promise.all([
+          listPrograms(),
+          listCourses(),
+          listProfessors(),
+          listTimeslots(),
+          listProgramYearRows(),
+        ]);
 
-  const [timeslots, setTimeslots] = useState<TimeslotResource[]>(
-    weekdays.flatMap((day) => baseSlotLabels.map((label) => ({ id: generateId(), day, label }))),
-  );
+        if (!isMounted) {
+          return;
+        }
 
-  const [programYearPlans, setProgramYearPlans] = useState<ProgramYearPlansByProgram>(
-    () =>
-      Object.entries(dummyProgramYearPlans).reduce<ProgramYearPlansByProgram>((acc, [programKey, yearPlans]) => {
-        acc[programKey] = yearPlans.map((yearPlan) => ({
-          year: yearPlan.year,
-          courses: yearPlan.courses.map((course) => ({
-            id: course.id,
-            code: course.code,
-            name: course.name,
-            professorName: course.professorName,
+        setPrograms(programList.map((item) => ({ id: item.id, value: item.value, label: item.label })));
+        setCourses(
+          courseList.map((item) => ({
+            id: item.id,
+            code: item.code,
+            name: item.name,
+            studyProgram: item.study_program ?? '',
           })),
-        }));
-        return acc;
-      }, {}),
-  );
+        );
+        setProfessors(
+          professorList.map((item) => ({
+            id: item.id,
+            name: item.name,
+            availableSlotIds: item.available_slot_ids,
+          })),
+        );
+        setTimeslots(timeslotList.map((item) => ({ id: item.id, day: item.day, label: item.label })));
+        setProgramYearPlans(mapProgramYearRowsToPlans(planRows));
+      } catch (error) {
+        console.error('Failed to load resource catalog from backend', error);
+      }
+    };
+
+    void loadCatalog();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const value = useMemo(
     () => ({

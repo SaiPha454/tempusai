@@ -1,4 +1,4 @@
-import { useMemo, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useMemo, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useResourcesCatalog, type CourseResource } from '../contexts/ResourcesCatalogContext';
 import { Tabs } from '../components/Tabs';
@@ -9,13 +9,30 @@ import { CourseSection } from './resources/CourseSection';
 import { TimeslotsSection } from './resources/TimeslotsSection';
 import { ProfessorsSection } from './resources/ProfessorsSection';
 import { StudentsSection } from './resources/StudentsSection';
+import { weekdays } from '../data/schedulingData';
 import {
-  examSubjectCatalog,
-  roomCapacityMap,
-  roomDirectory,
-  studyProgramOptions,
-  weekdays,
-} from '../data/schedulingData';
+  createCourse,
+  createProfessor,
+  createProgram,
+  createRoom,
+  createSpecialEnrollment,
+  createStudent,
+  createTimeslot,
+  deleteCourse,
+  deleteProfessor,
+  deleteRoom,
+  deleteSpecialEnrollment,
+  deleteStudent,
+  deleteTimeslot,
+  listRooms,
+  listSpecialEnrollments,
+  listStudents,
+  updateCourse,
+  updateProfessor,
+  updateRoom,
+  updateSpecialEnrollment,
+  updateStudent,
+} from '../api/resources';
 
 type ResourceTab =
   | 'Rooms'
@@ -53,7 +70,6 @@ const resourceTabs: ResourceTab[] = [
 const baseSlotLabels = ['9:00 AM - 12:00 PM', '1:00 PM - 4:00 PM', '4:30 PM - 7:30 PM'];
 const studyYears = ['1', '2', '3', '4'];
 
-const generateId = () => crypto.randomUUID();
 const toRoomName = (value: string) => value.toUpperCase();
 const toTitleCase = (value: string) =>
   value
@@ -76,11 +92,10 @@ export function ResourcesPage() {
   const anyTimeOptionValue = 'any-time';
   const [activeTab, setActiveTab] = useState<ResourceTab>('Rooms');
 
-  const [rooms, setRooms] = useState<RoomResource[]>(
-    roomDirectory.slice(0, 8).map((name) => ({ id: generateId(), name, capacity: String(roomCapacityMap[name] ?? '') })),
-  );
+  const [rooms, setRooms] = useState<RoomResource[]>([]);
   const [students, setStudents] = useState<StudentResource[]>([]);
   const [enrollments, setEnrollments] = useState<EnrollmentResource[]>([]);
+  const [resourceError, setResourceError] = useState('');
 
   const [roomNameInput, setRoomNameInput] = useState('');
   const [roomCapacityInput, setRoomCapacityInput] = useState('');
@@ -117,6 +132,55 @@ export function ResourcesPage() {
   const [editingStudentIds, setEditingStudentIds] = useState<Record<string, boolean>>({});
   const [editingEnrollmentIds, setEditingEnrollmentIds] = useState<Record<string, boolean>>({});
   const [editingCourseIds, setEditingCourseIds] = useState<Record<string, boolean>>({});
+
+  const reportError = (message: string, error: unknown) => {
+    console.error(message, error);
+    setResourceError(message);
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadPageResources = async () => {
+      try {
+        const [roomList, studentList, enrollmentList] = await Promise.all([
+          listRooms(),
+          listStudents(),
+          listSpecialEnrollments(),
+        ]);
+
+        if (!isMounted) {
+          return;
+        }
+
+        setRooms(roomList.map((room) => ({ id: room.id, name: room.name, capacity: String(room.capacity) })));
+        setStudents(
+          studentList.map((student) => ({
+            id: student.id,
+            studentId: student.student_id,
+            name: student.name,
+            studyProgram: student.study_program,
+            year: String(student.year),
+          })),
+        );
+        setEnrollments(
+          enrollmentList.map((enrollment) => ({
+            id: enrollment.id,
+            studentId: enrollment.student_id,
+            courseCodes: enrollment.course_codes,
+          })),
+        );
+      } catch (error) {
+        reportError('Failed to load resources from backend.', error);
+      }
+    };
+
+    void loadPageResources();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const programOptions = useMemo(
     () => [{ value: '', label: 'Select study program' }, ...programs.map((item) => ({ value: item.value, label: item.label }))],
@@ -162,7 +226,7 @@ export function ResourcesPage() {
       return [];
     }
 
-    return Array.from(new Set([...rooms.map((room) => room.name), ...roomDirectory.map((room) => toRoomName(room))]))
+    return Array.from(new Set(rooms.map((room) => room.name)))
       .filter((name) => name.toLowerCase().includes(normalized))
       .slice(0, 6);
   }, [roomNameInput, rooms]);
@@ -178,7 +242,7 @@ export function ResourcesPage() {
       return [];
     }
 
-    return Array.from(new Set([...programs.map((program) => program.label), ...studyProgramOptions.map((option) => toTitleCase(option.label))]))
+    return Array.from(new Set(programs.map((program) => program.label)))
       .filter((label) => label.toLowerCase().includes(normalized))
       .slice(0, 6);
   }, [programNameInput, programs]);
@@ -193,18 +257,8 @@ export function ResourcesPage() {
   }, [programNameInput, programs]);
 
   const courseSuggestionPool = useMemo(() => {
-    const merged = [
-      ...courses,
-      ...examSubjectCatalog.map((course) => ({
-        id: `catalog-${course.code}-${course.studyProgram || 'all-programs'}`,
-        code: course.code,
-        name: course.name,
-        studyProgram: course.studyProgram,
-      })),
-    ];
-
     const seen = new Set<string>();
-    return merged.filter((course) => {
+    return courses.filter((course) => {
       const key = `${course.code.trim().toLowerCase()}|${course.name.trim().toLowerCase()}`;
       if (seen.has(key)) {
         return false;
@@ -296,11 +350,377 @@ export function ResourcesPage() {
     setter(event.target.files?.[0]?.name ?? '');
   };
 
-  const toggleEditing = (
-    id: string,
-    setter: Dispatch<SetStateAction<Record<string, boolean>>>,
-  ) => {
+  const toggleEditing = (id: string, setter: Dispatch<SetStateAction<Record<string, boolean>>>) => {
     setter((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const addRoom = async () => {
+    if (!canAddRoom) return;
+    try {
+      const created = await createRoom({
+        name: toRoomName(roomNameInput.trim()),
+        capacity: Number(roomCapacityInput),
+      });
+      setRooms((prev) => [...prev, { id: created.id, name: created.name, capacity: String(created.capacity) }]);
+      setRoomNameInput('');
+      setRoomCapacityInput('');
+      setResourceError('');
+    } catch (error) {
+      reportError('Failed to create room.', error);
+    }
+  };
+
+  const removeRoom = async (roomId: string) => {
+    try {
+      await deleteRoom(roomId);
+      setRooms((prev) => prev.filter((item) => item.id !== roomId));
+      setResourceError('');
+    } catch (error) {
+      reportError('Failed to delete room.', error);
+    }
+  };
+
+  const toggleRoomEditing = async (roomId: string) => {
+    const isEditing = Boolean(editingRoomIds[roomId]);
+    if (!isEditing) {
+      toggleEditing(roomId, setEditingRoomIds);
+      return;
+    }
+
+    const room = rooms.find((item) => item.id === roomId);
+    if (!room) {
+      toggleEditing(roomId, setEditingRoomIds);
+      return;
+    }
+
+    try {
+      const updated = await updateRoom(roomId, {
+        name: toRoomName(room.name.trim()),
+        capacity: Number(room.capacity),
+      });
+      setRooms((prev) =>
+        prev.map((item) =>
+          item.id === roomId ? { id: updated.id, name: updated.name, capacity: String(updated.capacity) } : item,
+        ),
+      );
+      setResourceError('');
+      toggleEditing(roomId, setEditingRoomIds);
+    } catch (error) {
+      reportError('Failed to update room.', error);
+    }
+  };
+
+  const addProgram = async () => {
+    if (!canAddProgram) return;
+    const normalizedLabel = toTitleCase(programNameInput.trim());
+    const value = toProgramValue(normalizedLabel);
+    if (programs.some((item) => item.value === value)) return;
+
+    try {
+      const created = await createProgram({ label: normalizedLabel, value });
+      setPrograms((prev) => [...prev, { id: created.id, value: created.value, label: created.label }]);
+      setProgramNameInput('');
+      setResourceError('');
+    } catch (error) {
+      reportError('Failed to create program.', error);
+    }
+  };
+
+  const addCourse = async () => {
+    if (!canAddCourse) return;
+    try {
+      const created = await createCourse({
+        code: courseCodeInput.trim(),
+        name: courseNameInput.trim(),
+        study_program: courseProgramInput,
+      });
+      setCourses((prev) => [
+        ...prev,
+        {
+          id: created.id,
+          code: created.code,
+          name: created.name,
+          studyProgram: created.study_program ?? '',
+        },
+      ]);
+      setCourseCodeInput('');
+      setCourseNameInput('');
+      setCourseProgramInput('');
+      setResourceError('');
+    } catch (error) {
+      reportError('Failed to create course.', error);
+    }
+  };
+
+  const removeCourseById = async (courseId: string) => {
+    try {
+      await deleteCourse(courseId);
+      setCourses((prev) => prev.filter((item) => item.id !== courseId));
+      setResourceError('');
+    } catch (error) {
+      reportError('Failed to delete course.', error);
+    }
+  };
+
+  const toggleCourseEditing = async (courseId: string) => {
+    const isEditing = Boolean(editingCourseIds[courseId]);
+    if (!isEditing) {
+      toggleEditing(courseId, setEditingCourseIds);
+      return;
+    }
+
+    const course = courses.find((item) => item.id === courseId);
+    if (!course) {
+      toggleEditing(courseId, setEditingCourseIds);
+      return;
+    }
+
+    try {
+      const updated = await updateCourse(courseId, {
+        code: course.code.trim(),
+        name: course.name.trim(),
+        study_program: course.studyProgram || null,
+      });
+      setCourses((prev) =>
+        prev.map((item) =>
+          item.id === courseId
+            ? {
+                id: updated.id,
+                code: updated.code,
+                name: updated.name,
+                studyProgram: updated.study_program ?? '',
+              }
+            : item,
+        ),
+      );
+      setResourceError('');
+      toggleEditing(courseId, setEditingCourseIds);
+    } catch (error) {
+      reportError('Failed to update course.', error);
+    }
+  };
+
+  const addTimeslot = async (payload: { day: string; label: string }) => {
+    try {
+      const created = await createTimeslot(payload);
+      setTimeslots((prev) => [...prev, { id: created.id, day: created.day, label: created.label }]);
+      setResourceError('');
+    } catch (error) {
+      reportError('Failed to create timeslot.', error);
+    }
+  };
+
+  const removeTimeslotById = async (timeslotId: string) => {
+    try {
+      await deleteTimeslot(timeslotId);
+      setTimeslots((prev) => prev.filter((item) => item.id !== timeslotId));
+      setResourceError('');
+    } catch (error) {
+      reportError('Failed to delete timeslot.', error);
+    }
+  };
+
+  const addProfessor = async () => {
+    if (!canAddProfessor) return;
+    try {
+      const created = await createProfessor({
+        name: professorNameInput.trim(),
+        available_slot_ids:
+          professorAvailabilityInput.length > 0 ? professorAvailabilityInput : [anyTimeOptionValue],
+      });
+      setProfessors((prev) => [
+        ...prev,
+        { id: created.id, name: created.name, availableSlotIds: created.available_slot_ids },
+      ]);
+      setProfessorNameInput('');
+      setProfessorAvailabilityInput([]);
+      setResourceError('');
+    } catch (error) {
+      reportError('Failed to create professor.', error);
+    }
+  };
+
+  const removeProfessorById = async (professorId: string) => {
+    try {
+      await deleteProfessor(professorId);
+      setProfessors((prev) => prev.filter((item) => item.id !== professorId));
+      setResourceError('');
+    } catch (error) {
+      reportError('Failed to delete professor.', error);
+    }
+  };
+
+  const toggleProfessorEditing = async (professorId: string) => {
+    const isEditing = Boolean(editingProfessorIds[professorId]);
+    if (!isEditing) {
+      toggleEditing(professorId, setEditingProfessorIds);
+      return;
+    }
+
+    const professor = professors.find((item) => item.id === professorId);
+    if (!professor) {
+      toggleEditing(professorId, setEditingProfessorIds);
+      return;
+    }
+
+    try {
+      const updated = await updateProfessor(professorId, {
+        name: professor.name.trim(),
+        available_slot_ids: professor.availableSlotIds,
+      });
+      setProfessors((prev) =>
+        prev.map((item) =>
+          item.id === professorId
+            ? { id: updated.id, name: updated.name, availableSlotIds: updated.available_slot_ids }
+            : item,
+        ),
+      );
+      setResourceError('');
+      toggleEditing(professorId, setEditingProfessorIds);
+    } catch (error) {
+      reportError('Failed to update professor.', error);
+    }
+  };
+
+  const addStudent = async () => {
+    if (!canAddStudent) return;
+
+    try {
+      const created = await createStudent({
+        student_id: studentIdInput.trim(),
+        name: studentNameInput.trim(),
+        study_program: studentProgramInput,
+        year: Number(studentYearInput),
+      });
+      setStudents((prev) => [
+        ...prev,
+        {
+          id: created.id,
+          studentId: created.student_id,
+          name: created.name,
+          studyProgram: created.study_program,
+          year: String(created.year),
+        },
+      ]);
+      setStudentIdInput('');
+      setStudentNameInput('');
+      setStudentProgramInput('');
+      setStudentYearInput('');
+      setResourceError('');
+    } catch (error) {
+      reportError('Failed to create student.', error);
+    }
+  };
+
+  const removeStudentById = async (studentPk: string) => {
+    try {
+      await deleteStudent(studentPk);
+      setStudents((prev) => prev.filter((item) => item.id !== studentPk));
+      setResourceError('');
+    } catch (error) {
+      reportError('Failed to delete student.', error);
+    }
+  };
+
+  const toggleStudentEditing = async (studentPk: string) => {
+    const isEditing = Boolean(editingStudentIds[studentPk]);
+    if (!isEditing) {
+      toggleEditing(studentPk, setEditingStudentIds);
+      return;
+    }
+
+    const student = students.find((item) => item.id === studentPk);
+    if (!student) {
+      toggleEditing(studentPk, setEditingStudentIds);
+      return;
+    }
+
+    try {
+      const updated = await updateStudent(studentPk, {
+        student_id: student.studentId.trim(),
+        name: student.name.trim(),
+        study_program: student.studyProgram,
+        year: Number(student.year),
+      });
+      setStudents((prev) =>
+        prev.map((item) =>
+          item.id === studentPk
+            ? {
+                id: updated.id,
+                studentId: updated.student_id,
+                name: updated.name,
+                studyProgram: updated.study_program,
+                year: String(updated.year),
+              }
+            : item,
+        ),
+      );
+      setResourceError('');
+      toggleEditing(studentPk, setEditingStudentIds);
+    } catch (error) {
+      reportError('Failed to update student.', error);
+    }
+  };
+
+  const addEnrollment = async () => {
+    if (!canAddEnrollment) return;
+    try {
+      const created = await createSpecialEnrollment({
+        student_id: enrollmentStudentIdInput,
+        course_codes: enrollmentCourseCodesInput,
+      });
+      setEnrollments((prev) => [
+        ...prev,
+        { id: created.id, studentId: created.student_id, courseCodes: created.course_codes },
+      ]);
+      setEnrollmentStudentIdInput('');
+      setEnrollmentCourseCodesInput([]);
+      setResourceError('');
+    } catch (error) {
+      reportError('Failed to create special enrollment.', error);
+    }
+  };
+
+  const removeEnrollmentById = async (enrollmentId: string) => {
+    try {
+      await deleteSpecialEnrollment(enrollmentId);
+      setEnrollments((prev) => prev.filter((item) => item.id !== enrollmentId));
+      setResourceError('');
+    } catch (error) {
+      reportError('Failed to delete special enrollment.', error);
+    }
+  };
+
+  const toggleEnrollmentEditing = async (enrollmentId: string) => {
+    const isEditing = Boolean(editingEnrollmentIds[enrollmentId]);
+    if (!isEditing) {
+      toggleEditing(enrollmentId, setEditingEnrollmentIds);
+      return;
+    }
+
+    const enrollment = enrollments.find((item) => item.id === enrollmentId);
+    if (!enrollment) {
+      toggleEditing(enrollmentId, setEditingEnrollmentIds);
+      return;
+    }
+
+    try {
+      const updated = await updateSpecialEnrollment(enrollmentId, {
+        student_id: enrollment.studentId,
+        course_codes: enrollment.courseCodes,
+      });
+      setEnrollments((prev) =>
+        prev.map((item) =>
+          item.id === enrollmentId
+            ? { id: updated.id, studentId: updated.student_id, courseCodes: updated.course_codes }
+            : item,
+        ),
+      );
+      setResourceError('');
+      toggleEditing(enrollmentId, setEditingEnrollmentIds);
+    } catch (error) {
+      reportError('Failed to update special enrollment.', error);
+    }
   };
 
   const getCoursesForStudent = (studentId: string) => {
@@ -396,6 +816,11 @@ export function ResourcesPage() {
   return (
     <div>
       <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Resources</h1>
+      {resourceError && (
+        <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          {resourceError}
+        </p>
+      )}
 
       <div className="mt-6">
         <Tabs tabs={resourceTabs} activeTab={activeTab} onChange={(tab) => setActiveTab(tab as ResourceTab)} />
@@ -411,8 +836,9 @@ export function ResourcesPage() {
             roomCapacityInput={roomCapacityInput}
             setRoomCapacityInput={setRoomCapacityInput}
             canAddRoom={canAddRoom}
+            onAddRoom={addRoom}
+            onRemoveRoom={removeRoom}
             setRooms={setRooms}
-            generateId={generateId}
             toRoomName={toRoomName}
             sortedRooms={sortedRooms}
             roomSuggestions={roomSuggestions}
@@ -420,7 +846,7 @@ export function ResourcesPage() {
             isRoomNameAlreadyExists={isRoomNameAlreadyExists}
             setIsRoomNameFocused={setIsRoomNameFocused}
             editingRoomIds={editingRoomIds}
-            toggleRoomEditing={(id) => toggleEditing(id, setEditingRoomIds)}
+            toggleRoomEditing={toggleRoomEditing}
           />
         )}
 
@@ -430,14 +856,12 @@ export function ResourcesPage() {
             setProgramNameInput={setProgramNameInput}
             canAddProgram={canAddProgram}
             programs={programs}
-            setPrograms={setPrograms}
-            generateId={generateId}
             toTitleCase={toTitleCase}
-            toProgramValue={toProgramValue}
             showProgramSuggestions={showProgramSuggestions}
             programSuggestions={programSuggestions}
             setIsProgramNameFocused={setIsProgramNameFocused}
             isProgramAlreadyExists={isProgramAlreadyExists}
+            onAddProgram={addProgram}
             onOpenProgramDetail={(program) =>
               navigate(`/programs/${encodeURIComponent(program.value || toProgramValue(program.label))}`)
             }
@@ -461,21 +885,7 @@ export function ResourcesPage() {
             courseProgramOptions={courseProgramOptions}
             isCourseCodeAlreadyExists={isCourseCodeAlreadyExists}
             canAddCourse={canAddCourse}
-            addCourse={() => {
-              if (!canAddCourse) return;
-              setCourses((prev) => [
-                ...prev,
-                {
-                  id: generateId(),
-                  code: courseCodeInput.trim(),
-                  name: courseNameInput.trim(),
-                  studyProgram: courseProgramInput,
-                },
-              ]);
-              setCourseCodeInput('');
-              setCourseNameInput('');
-              setCourseProgramInput('');
-            }}
+            addCourse={() => void addCourse()}
             courseFilterProgram={courseFilterProgram}
             setCourseFilterProgram={setCourseFilterProgram}
             courseFilterProgramOptions={courseFilterProgramOptions}
@@ -483,7 +893,7 @@ export function ResourcesPage() {
             setCourseSearchInput={setCourseSearchInput}
             filteredCourses={filteredCourses}
             editingCourseIds={editingCourseIds}
-            toggleCourseEditing={(id) => toggleEditing(id, setEditingCourseIds)}
+            toggleCourseEditing={(id) => void toggleCourseEditing(id)}
             updateCourseCode={(id, value) =>
               setCourses((prev) =>
                 prev.map((item) => (item.id === id ? { ...item, code: value } : item)),
@@ -499,9 +909,7 @@ export function ResourcesPage() {
                 prev.map((item) => (item.id === id ? { ...item, studyProgram: value } : item)),
               )
             }
-            removeCourse={(id) =>
-              setCourses((prev) => prev.filter((item) => item.id !== id))
-            }
+            removeCourse={(id) => void removeCourseById(id)}
             applyCourseSuggestion={(course) => {
               setCourseCodeInput(course.code);
               setCourseNameInput(course.name);
@@ -515,8 +923,8 @@ export function ResourcesPage() {
             orderedTimeslotLabels={orderedTimeslotLabels}
             weekdays={weekdays}
             timeslotMap={timeslotMap}
-            setTimeslots={setTimeslots}
-            generateId={generateId}
+            onAddTimeslot={(payload) => void addTimeslot(payload)}
+            onRemoveTimeslot={(timeslotId) => void removeTimeslotById(timeslotId)}
           />
         )}
 
@@ -533,27 +941,12 @@ export function ResourcesPage() {
             professorSlotOptions={professorSlotOptions}
             anyTimeOptionValue={anyTimeOptionValue}
             canAddProfessor={canAddProfessor}
-            addProfessor={() => {
-              if (!canAddProfessor) return;
-              setProfessors((prev) => [
-                ...prev,
-                {
-                  id: generateId(),
-                  name: professorNameInput.trim(),
-                  availableSlotIds:
-                    professorAvailabilityInput.length > 0
-                      ? professorAvailabilityInput
-                      : [anyTimeOptionValue],
-                },
-              ]);
-              setProfessorNameInput('');
-              setProfessorAvailabilityInput([]);
-            }}
+            addProfessor={() => void addProfessor()}
             professorSearchInput={professorSearchInput}
             setProfessorSearchInput={setProfessorSearchInput}
             filteredProfessors={filteredProfessors}
             editingProfessorIds={editingProfessorIds}
-            toggleProfessorEditing={(id) => toggleEditing(id, setEditingProfessorIds)}
+            toggleProfessorEditing={(id) => void toggleProfessorEditing(id)}
             updateProfessorName={(id, name) =>
               setProfessors((prev) =>
                 prev.map((item) => (item.id === id ? { ...item, name } : item)),
@@ -564,9 +957,7 @@ export function ResourcesPage() {
                 prev.map((item) => (item.id === id ? { ...item, availableSlotIds: slotIds } : item)),
               )
             }
-            removeProfessor={(id) =>
-              setProfessors((prev) => prev.filter((item) => item.id !== id))
-            }
+            removeProfessor={(id) => void removeProfessorById(id)}
           />
         )}
 
@@ -585,30 +976,14 @@ export function ResourcesPage() {
             yearOptions={yearOptions}
             programOptions={programOptions}
             canAddStudent={canAddStudent}
-            addStudent={() => {
-              if (!canAddStudent) return;
-              setStudents((prev) => [
-                ...prev,
-                {
-                  id: generateId(),
-                  studentId: studentIdInput.trim(),
-                  name: studentNameInput.trim(),
-                  studyProgram: studentProgramInput,
-                  year: studentYearInput,
-                },
-              ]);
-              setStudentIdInput('');
-              setStudentNameInput('');
-              setStudentProgramInput('');
-              setStudentYearInput('');
-            }}
+            addStudent={() => void addStudent()}
             studentFilterProgram={studentFilterProgram}
             setStudentFilterProgram={setStudentFilterProgram}
             studentFilterYear={studentFilterYear}
             setStudentFilterYear={setStudentFilterYear}
             filteredStudents={filteredStudents}
             editingStudentIds={editingStudentIds}
-            toggleStudentEditing={(id) => toggleEditing(id, setEditingStudentIds)}
+            toggleStudentEditing={(id) => void toggleStudentEditing(id)}
             updateStudentId={(id, value) =>
               setStudents((prev) =>
                 prev.map((item) => (item.id === id ? { ...item, studentId: value } : item)),
@@ -629,9 +1004,7 @@ export function ResourcesPage() {
                 prev.map((item) => (item.id === id ? { ...item, studyProgram: value } : item)),
               )
             }
-            removeStudent={(id) =>
-              setStudents((prev) => prev.filter((item) => item.id !== id))
-            }
+            removeStudent={(id) => void removeStudentById(id)}
             programs={programs}
           />
         )}
@@ -653,19 +1026,7 @@ export function ResourcesPage() {
             studentOptions={studentOptions}
             getCourseOptionItemsForStudent={getCourseOptionItemsForStudent}
             canAddEnrollment={canAddEnrollment}
-            onAddEnrollment={() => {
-              if (!canAddEnrollment) return;
-              setEnrollments((prev) => [
-                ...prev,
-                {
-                  id: generateId(),
-                  studentId: enrollmentStudentIdInput,
-                  courseCodes: enrollmentCourseCodesInput,
-                },
-              ]);
-              setEnrollmentStudentIdInput('');
-              setEnrollmentCourseCodesInput([]);
-            }}
+            onAddEnrollment={() => void addEnrollment()}
             enrollmentFilterProgram={enrollmentFilterProgram}
             onEnrollmentFilterProgramChange={(value) => {
               setEnrollmentFilterProgram(value);
@@ -694,7 +1055,7 @@ export function ResourcesPage() {
             enrollmentFilterCourseOptions={enrollmentFilterCourseOptions}
             filteredEnrollments={filteredEnrollments}
             editingEnrollmentIds={editingEnrollmentIds}
-            onToggleEnrollmentEditing={(id) => toggleEditing(id, setEditingEnrollmentIds)}
+            onToggleEnrollmentEditing={(id) => void toggleEnrollmentEditing(id)}
             onEnrollmentStudentChange={(id, value) =>
               setEnrollments((prev) =>
                 prev.map((item) => {
@@ -720,9 +1081,7 @@ export function ResourcesPage() {
                 ),
               )
             }
-            onRemoveEnrollment={(id) =>
-              setEnrollments((prev) => prev.filter((item) => item.id !== id))
-            }
+            onRemoveEnrollment={(id) => void removeEnrollmentById(id)}
             students={students}
             courses={courses}
           />

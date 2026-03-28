@@ -11,16 +11,16 @@ type TimeslotsSectionProps = {
   orderedTimeslotLabels: string[];
   weekdays: string[];
   timeslotMap: Map<string, TimeslotResource>;
-  setTimeslots: React.Dispatch<React.SetStateAction<TimeslotResource[]>>;
-  generateId: () => string;
+  onAddTimeslot: (payload: { day: string; label: string }) => void;
+  onRemoveTimeslot: (timeslotId: string) => void;
 };
 
 export function TimeslotsSection({
   orderedTimeslotLabels,
   weekdays,
   timeslotMap,
-  setTimeslots,
-  generateId,
+  onAddTimeslot,
+  onRemoveTimeslot,
 }: TimeslotsSectionProps) {
   return (
     <Card title="Timeslots" icon={CalendarClock}>
@@ -49,9 +49,7 @@ export function TimeslotsSection({
                       <td key={label} className="px-2 py-2 text-center align-middle">
                         <button
                           type="button"
-                          onClick={() =>
-                            setTimeslots((prev) => [...prev, { id: generateId(), day, label }])
-                          }
+                          onClick={() => onAddTimeslot({ day, label })}
                           className="inline-flex items-center justify-center rounded p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-[#0A64BC]"
                           aria-label={`Add timeslot ${day} ${label}`}
                         >
@@ -67,9 +65,7 @@ export function TimeslotsSection({
                         <span className="text-xs text-slate-600">Set</span>
                         <button
                           type="button"
-                          onClick={() =>
-                            setTimeslots((prev) => prev.filter((item) => item.id !== slot.id))
-                          }
+                          onClick={() => onRemoveTimeslot(slot.id)}
                           className="inline-flex items-center justify-center rounded p-1.5 text-rose-700 transition hover:bg-rose-50"
                         >
                           <Trash2 size={13} />

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Card } from '../components/Card';
 import { useResourcesCatalog } from '../contexts/ResourcesCatalogContext';
+import { createProgramYearRow, deleteProgramYearRow, updateProgramYearRow } from '../api/resources';
 
 type YearCourse = {
   id: string;
@@ -27,7 +28,6 @@ type AddCourseDraft = {
   professorName: string;
 };
 
-const generateId = () => crypto.randomUUID();
 const toProgramValue = (value: string) => value.toLowerCase().replace(/\s+/g, '-');
 
 function SearchableSelect({
@@ -198,6 +198,90 @@ export function ProgramDetailPage() {
     );
   };
 
+  const removeCourseFromYear = async (year: number, courseId: string) => {
+    try {
+      await deleteProgramYearRow(courseId);
+      setYearPlans((prev) =>
+        prev.map((item) =>
+          item.year === year
+            ? {
+                ...item,
+                courses: item.courses.filter((row) => row.id !== courseId),
+              }
+            : item,
+        ),
+      );
+    } catch (error) {
+      console.error('Failed to delete program-year row', error);
+    }
+  };
+
+  const saveEditedCourse = async (year: number, course: YearCourse) => {
+    try {
+      const updated = await updateProgramYearRow(course.id, {
+        program_value: programValue,
+        year,
+        course_code: course.code,
+        professor_name: course.professorName || null,
+      });
+
+      updateCourseInYear(year, course.id, () => ({
+        id: updated.id,
+        code: updated.course_code,
+        name: updated.course_name,
+        professorName: updated.professor_name ?? '',
+      }));
+
+      setEditingCourseIds((prev) => ({
+        ...prev,
+        [course.id]: false,
+      }));
+    } catch (error) {
+      console.error('Failed to update program-year row', error);
+    }
+  };
+
+  const addCourseToYear = async (year: number, draft: AddCourseDraft) => {
+    try {
+      const created = await createProgramYearRow({
+        program_value: programValue,
+        year,
+        course_code: draft.courseCode,
+        professor_name: draft.professorName || null,
+      });
+
+      setYearPlans((prev) =>
+        prev.map((item) =>
+          item.year === year
+            ? {
+                ...item,
+                courses: [
+                  ...item.courses,
+                  {
+                    id: created.id,
+                    code: created.course_code,
+                    name: created.course_name,
+                    professorName: created.professor_name ?? '',
+                  },
+                ],
+              }
+            : item,
+        ),
+      );
+
+      setAddDrafts((prev) => ({
+        ...prev,
+        [year]: {
+          courseCode: '',
+          courseName: '',
+          professorName: '',
+        },
+      }));
+    } catch (error) {
+      console.error('Failed to create program-year row', error);
+    }
+  };
+
   return (
     <div className="mx-auto w-full max-w-6xl pb-8">
       <button
@@ -280,12 +364,7 @@ export function ProgramDetailPage() {
 
                             <button
                               type="button"
-                              onClick={() =>
-                                setEditingCourseIds((prev) => ({
-                                  ...prev,
-                                  [course.id]: false,
-                                }))
-                              }
+                              onClick={() => void saveEditedCourse(yearPlan.year, course)}
                               className="inline-flex h-9 items-center justify-center rounded-md p-2 text-slate-600 transition hover:bg-slate-100 hover:text-[#0A64BC]"
                               aria-label="Done editing"
                             >
@@ -294,18 +373,7 @@ export function ProgramDetailPage() {
 
                             <button
                               type="button"
-                              onClick={() =>
-                                setYearPlans((prev) =>
-                                  prev.map((item) =>
-                                    item.year === yearPlan.year
-                                      ? {
-                                          ...item,
-                                          courses: item.courses.filter((row) => row.id !== course.id),
-                                        }
-                                      : item,
-                                  ),
-                                )
-                              }
+                              onClick={() => void removeCourseFromYear(yearPlan.year, course.id)}
                               className="inline-flex h-9 items-center justify-center rounded-md p-2 text-rose-700 transition hover:bg-rose-50"
                               aria-label="Remove course"
                             >
@@ -332,18 +400,7 @@ export function ProgramDetailPage() {
                             </button>
                             <button
                               type="button"
-                              onClick={() =>
-                                setYearPlans((prev) =>
-                                  prev.map((item) =>
-                                    item.year === yearPlan.year
-                                      ? {
-                                          ...item,
-                                          courses: item.courses.filter((row) => row.id !== course.id),
-                                        }
-                                      : item,
-                                  ),
-                                )
-                              }
+                              onClick={() => void removeCourseFromYear(yearPlan.year, course.id)}
                               className="inline-flex h-8 w-8 items-center justify-center rounded p-1.5 text-rose-700 transition hover:bg-rose-50"
                               aria-label="Remove course"
                             >
@@ -424,34 +481,7 @@ export function ProgramDetailPage() {
                       if (!canAddCourse) {
                         return;
                       }
-
-                      setYearPlans((prev) =>
-                        prev.map((item) =>
-                          item.year === yearPlan.year
-                            ? {
-                                ...item,
-                                courses: [
-                                  ...item.courses,
-                                  {
-                                    id: generateId(),
-                                    code: draft.courseCode,
-                                    name: draft.courseName,
-                                    professorName: draft.professorName,
-                                  },
-                                ],
-                              }
-                            : item,
-                        ),
-                      );
-
-                      setAddDrafts((prev) => ({
-                        ...prev,
-                        [yearPlan.year]: {
-                          courseCode: '',
-                          courseName: '',
-                          professorName: '',
-                        },
-                      }));
+                      void addCourseToYear(yearPlan.year, draft);
                     }}
                     className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-[#0A64BC] px-3 text-sm font-medium text-white transition hover:bg-[#0959A8] disabled:cursor-not-allowed disabled:bg-slate-300"
                   >
