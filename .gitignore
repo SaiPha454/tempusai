@@ -25,3 +25,6 @@ pnpm-debug.log*
 
 # TypeScript
 *.tsbuildinfo
+
+# Legacy migration artifact
+frontend/.git_frontend_backup/
