@@ -1,5 +1,7 @@
 # Dependencies
 node_modules/
+.venv/
+venv/
 
 # Build output
 dist/
@@ -25,6 +27,17 @@ pnpm-debug.log*
 
 # TypeScript
 *.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
 # Legacy migration artifact
 frontend/.git_frontend_backup/
