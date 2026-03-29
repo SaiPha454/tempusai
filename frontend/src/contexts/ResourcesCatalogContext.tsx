@@ -95,40 +95,72 @@ export function ResourcesCatalogProvider({ children }: { children: ReactNode }) 
 
     const loadCatalog = async () => {
       try {
-        const [programList, courseList, professorList, timeslotList, roomList, planRows] = await Promise.all([
-          listPrograms(),
-          listCourses(),
-          listProfessors(),
-          listTimeslots(),
-          listRooms(),
-          listProgramYearRows(),
-        ]);
-
-        if (!isMounted) {
-          return;
+        const programList = await listPrograms();
+        if (isMounted) {
+          setPrograms(programList.map((item) => ({ id: item.id, value: item.value, label: item.label })));
         }
+      } catch (error) {
+        if (isMounted) {
+          setPrograms([]);
+        }
+        console.error('Failed to load programs from backend', error);
+      }
 
-        setPrograms(programList.map((item) => ({ id: item.id, value: item.value, label: item.label })));
+      const results = await Promise.allSettled([
+        listCourses(),
+        listProfessors(),
+        listTimeslots(),
+        listRooms(),
+        listProgramYearRows(),
+      ]);
+
+      if (!isMounted) {
+        return;
+      }
+
+      const [coursesResult, professorsResult, timeslotsResult, roomsResult, planRowsResult] = results;
+
+      if (coursesResult.status === 'fulfilled') {
         setCourses(
-          courseList.map((item) => ({
+          coursesResult.value.map((item) => ({
             id: item.id,
             code: item.code,
             name: item.name,
             studyProgram: item.study_program ?? '',
           })),
         );
+      } else {
+        console.error('Failed to load courses from backend', coursesResult.reason);
+      }
+
+      if (professorsResult.status === 'fulfilled') {
         setProfessors(
-          professorList.map((item) => ({
+          professorsResult.value.map((item) => ({
             id: item.id,
             name: item.name,
             availableSlotIds: item.available_slot_ids,
           })),
         );
-        setTimeslots(timeslotList.map((item) => ({ id: item.id, day: item.day, label: item.label })));
-        setRooms(roomList.map((item) => ({ id: item.id, name: item.name, capacity: item.capacity })));
-        setProgramYearPlans(mapProgramYearRowsToPlans(planRows));
-      } catch (error) {
-        console.error('Failed to load resource catalog from backend', error);
+      } else {
+        console.error('Failed to load professors from backend', professorsResult.reason);
+      }
+
+      if (timeslotsResult.status === 'fulfilled') {
+        setTimeslots(timeslotsResult.value.map((item) => ({ id: item.id, day: item.day, label: item.label })));
+      } else {
+        console.error('Failed to load timeslots from backend', timeslotsResult.reason);
+      }
+
+      if (roomsResult.status === 'fulfilled') {
+        setRooms(roomsResult.value.map((item) => ({ id: item.id, name: item.name, capacity: item.capacity })));
+      } else {
+        console.error('Failed to load rooms from backend', roomsResult.reason);
+      }
+
+      if (planRowsResult.status === 'fulfilled') {
+        setProgramYearPlans(mapProgramYearRowsToPlans(planRowsResult.value));
+      } else {
+        console.error('Failed to load program-year plans from backend', planRowsResult.reason);
       }
     };
 

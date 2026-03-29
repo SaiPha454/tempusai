@@ -29,6 +29,7 @@ from app.schemas.scheduling import (
     ScheduleConflictRead,
 )
 from app.services.errors import bad_request, not_found
+from app.services.prolog_csp import PrologClassScheduler, PrologCourseRow
 
 
 def _normalize_day(day: str | None) -> int:
@@ -96,6 +97,50 @@ class SchedulingService:
         )
         occupied_room_slots, occupied_professor_slots = self._get_confirmed_resource_occupancy()
 
+        preferred_timeslots_by_course_id: dict[UUID, list[UUID]] = {}
+        for raw_course_id, raw_slot_ids in payload.preferred_timeslot_by_course_id.items():
+            try:
+                course_id = UUID(raw_course_id)
+            except (TypeError, ValueError):
+                continue
+
+            slot_ids: list[UUID] = []
+            for raw_slot_id in raw_slot_ids:
+                try:
+                    slot_ids.append(UUID(raw_slot_id))
+                except (TypeError, ValueError):
+                    continue
+
+            if slot_ids:
+                preferred_timeslots_by_course_id[course_id] = slot_ids
+
+        try:
+            prolog_solver = PrologClassScheduler()
+            prolog_assignment_by_course_id = prolog_solver.solve(
+                course_rows=[
+                    PrologCourseRow(
+                        course_id=row.course_id,
+                        professor_id=row.professor_id,
+                        year=row.year,
+                        required_capacity=course_demand_by_pair.get((row.course_id, row.year), 0),
+                    )
+                    for row in plan_rows
+                ],
+                room_capacity_by_id={room.id: room.capacity for room in rooms},
+                timeslot_ids=[slot.id for slot in timeslots],
+                preferred_timeslots_by_course_id=preferred_timeslots_by_course_id,
+                occupied_room_slots=occupied_room_slots,
+                occupied_professor_slots=occupied_professor_slots,
+                professor_no_overlap=payload.constraints.get("professorNoOverlap", True),
+                student_groups_no_overlap=payload.constraints.get("studentGroupsNoOverlap", True),
+                room_capacity_check=payload.constraints.get("roomCapacityCheck", True),
+            )
+        except Exception as error:
+            raise bad_request(f"Unable to generate schedule using Prolog CSP solver: {error}") from error
+
+        timeslot_by_id = {slot.id: slot for slot in timeslots}
+        room_by_id = {room.id: room for room in rooms}
+
         snapshot = ScheduleClassSnapshot(
             program_id=program.id,
             status="draft",
@@ -110,57 +155,25 @@ class SchedulingService:
 
         entries: list[ScheduleClassEntry] = []
         for row in plan_rows:
-            required_capacity = course_demand_by_pair.get((row.course_id, row.year), 0)
-            preferred_timeslots = payload.preferred_timeslot_by_course_id.get(str(row.course_id), [])
-            ordered_timeslots = sorted(
-                timeslots,
-                key=lambda slot: (
-                    0 if payload.constraints.get("prioritizeProfessorPreferences", True) and str(slot.id) in preferred_timeslots else 1,
-                    _normalize_day(slot.day),
-                    slot.label,
-                ),
-            )
+            prolog_assignment = prolog_assignment_by_course_id.get(row.course_id)
+            chosen_room_id: UUID | None = None
+            chosen_timeslot_id: UUID | None = None
 
-            chosen_slot: Timeslot | None = None
-            chosen_room: Room | None = None
-            for timeslot in ordered_timeslots:
-                for room in rooms:
-                    if payload.constraints.get("roomCapacityCheck", True) and room.capacity < required_capacity:
-                        continue
-
-                    conflicts = self._compute_conflict_codes_for_candidate(
-                        entries=entries,
-                        year=row.year,
-                        professor_id=row.professor_id,
-                        timeslot_id=timeslot.id,
-                        room_id=room.id,
-                        constraints=payload.constraints,
-                        occupied_room_slots=occupied_room_slots,
-                        occupied_professor_slots=occupied_professor_slots,
-                    )
-                    hard_conflict_codes = {"room_overlap", "professor_overlap", "year_overlap"}
-                    has_hard_conflict = any(code in hard_conflict_codes for code in conflicts)
-                    if not has_hard_conflict:
-                        chosen_slot = timeslot
-                        chosen_room = room
-                        break
-                if chosen_slot and chosen_room:
-                    break
-
-            if not chosen_slot or not chosen_room:
-                chosen_slot = ordered_timeslots[0] if ordered_timeslots else None
-                if payload.constraints.get("roomCapacityCheck", True):
-                    chosen_room = next((room for room in rooms if room.capacity >= required_capacity), None)
-                else:
-                    chosen_room = rooms[0] if rooms else None
+            if prolog_assignment:
+                prolog_room_id, prolog_timeslot_id = prolog_assignment
+                prolog_room = room_by_id.get(prolog_room_id)
+                prolog_slot = timeslot_by_id.get(prolog_timeslot_id)
+                if prolog_room and prolog_slot:
+                    chosen_room_id = prolog_room.id
+                    chosen_timeslot_id = prolog_slot.id
 
             entry = ScheduleClassEntry(
                 snapshot_id=snapshot.id,
                 course_id=row.course_id,
                 professor_id=row.professor_id,
                 year=row.year,
-                timeslot_id=chosen_slot.id if chosen_slot else None,
-                room_id=chosen_room.id if chosen_room else None,
+                timeslot_id=chosen_timeslot_id,
+                room_id=chosen_room_id,
                 manually_adjusted=False,
             )
             entries.append(entry)
