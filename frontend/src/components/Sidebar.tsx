@@ -1,12 +1,20 @@
 import { PenSquare, type LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
 
-type SidebarItem = {
+type SidebarLinkItem = {
+  type?: 'link';
   label: string;
   icon: LucideIcon;
   active?: boolean;
   onClick?: () => void;
 };
+
+type SidebarDividerItem = {
+  type: 'divider';
+  label?: string;
+};
+
+type SidebarItem = SidebarLinkItem | SidebarDividerItem;
 
 type SidebarProps = {
   brand: string;
@@ -30,6 +38,16 @@ export function Sidebar({ brand, items, onNewConversation }: SidebarProps) {
 
       <nav className="mt-8 space-y-1">
         {items.map((item) => {
+          if (item.type === 'divider') {
+            return (
+              <div key={item.label ?? 'divider'} className="my-3 border-t border-slate-200 pt-2">
+                {item.label ? (
+                  <p className="px-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{item.label}</p>
+                ) : null}
+              </div>
+            );
+          }
+
           const Icon = item.icon;
           return (
             <button

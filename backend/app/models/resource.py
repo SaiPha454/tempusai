@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -132,3 +133,93 @@ class ProgramYearCourse(Base):
     program: Mapped["Program"] = relationship(back_populates="year_plan_courses")
     course: Mapped["Course"] = relationship(back_populates="year_plan_links")
     professor: Mapped["Professor | None"] = relationship(back_populates="year_plan_courses")
+
+
+class ScheduleClassSnapshot(Base):
+    __tablename__ = "schedule_class_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    program_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("programs.id", ondelete="CASCADE"),
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(32), default="draft", index=True)
+    constraints: Mapped[dict[str, bool]] = mapped_column(JSON, default=dict)
+    selected_room_names: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    program: Mapped["Program"] = relationship()
+    entries: Mapped[list["ScheduleClassEntry"]] = relationship(
+        back_populates="snapshot",
+        cascade="all, delete-orphan",
+    )
+
+
+class ScheduleClassEntry(Base):
+    __tablename__ = "schedule_class_entries"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("schedule_class_snapshots.id", ondelete="CASCADE"),
+        index=True,
+    )
+    course_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("courses.id", ondelete="CASCADE"), index=True)
+    professor_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("professors.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    year: Mapped[int] = mapped_column(Integer)
+    timeslot_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("timeslots.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    room_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("rooms.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    manually_adjusted: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    __table_args__ = (
+        CheckConstraint("year BETWEEN 1 AND 4", name="ck_schedule_class_entries_year_1_4"),
+    )
+
+    snapshot: Mapped["ScheduleClassSnapshot"] = relationship(back_populates="entries")
+    course: Mapped["Course"] = relationship()
+    professor: Mapped["Professor | None"] = relationship()
+    timeslot: Mapped["Timeslot | None"] = relationship()
+    room: Mapped["Room | None"] = relationship()
+
+
+class ScheduleGenerationJob(Base):
+    __tablename__ = "schedule_generation_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("schedule_class_snapshots.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    job_type: Mapped[str] = mapped_column(String(32), default="class", index=True)
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    snapshot: Mapped["ScheduleClassSnapshot | None"] = relationship()

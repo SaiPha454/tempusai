@@ -1,16 +1,21 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { AxiosError } from 'axios';
+import { useNavigate } from 'react-router-dom';
 import { Tabs } from '../components/Tabs';
 import { useResourcesCatalog } from '../contexts/ResourcesCatalogContext';
+import {
+  generateClassSchedule,
+  getLatestClassScheduleDraft,
+  listClassDraftSummary,
+  listConfirmedClassScheduleSummary,
+} from '../api/scheduling';
 import { ScheduleExamTab } from './scheduling/ScheduleExamTab';
 import { ScheduleClassTab } from './scheduling/ScheduleClassTab';
 import {
   examSubjectCatalog,
   examTimeSlotOptions,
   examTypeOptions,
-  roomCapacityMap,
-  roomDirectory,
   semesterOptions,
-  studyProgramOptions,
   type SelectOption,
 } from '../data/schedulingData';
 
@@ -78,13 +83,18 @@ const formatIsoDateLabel = (isoDate: string) => {
 };
 
 export function SchedulingManagerPage() {
-  const { professors, timeslots, programYearPlans } = useResourcesCatalog();
+  const navigate = useNavigate();
+  const { programs, professors, timeslots, rooms, programYearPlans } = useResourcesCatalog();
 
   const [activeTab, setActiveTab] = useState<(typeof schedulingTabs)[number]>('Schedule Class');
   const [selectedStudyProgram, setSelectedStudyProgram] = useState('');
   const [roomSearch, setRoomSearch] = useState('');
   const [selectedRooms, setSelectedRooms] = useState<string[]>([]);
   const [preferredTimeslotByCourseId, setPreferredTimeslotByCourseId] = useState<Record<string, string[]>>({});
+  const [isGeneratingClassSchedule, setIsGeneratingClassSchedule] = useState(false);
+  const [isCheckingExistingDraft, setIsCheckingExistingDraft] = useState(false);
+  const [draftCountByProgram, setDraftCountByProgram] = useState<Record<string, number>>({});
+  const [confirmedCountByProgram, setConfirmedCountByProgram] = useState<Record<string, number>>({});
 
   const [examFilters, setExamFilters] = useState<ExamFilterForm>(initialExamFilters);
   const [examProgramPlans, setExamProgramPlans] = useState<ExamProgramPlan[]>([]);
@@ -166,10 +176,27 @@ export function SchedulingManagerPage() {
       .filter((option) => Boolean(option.label));
   };
 
+  const studyProgramOptions = useMemo<SelectOption[]>(
+    () => [
+      { value: '', label: 'Select study program' },
+      ...programs
+        .map((program) => ({ value: program.value, label: program.label }))
+        .sort((left, right) => left.label.localeCompare(right.label)),
+    ],
+    [programs],
+  );
+
+  const roomDirectory = useMemo(() => rooms.map((room) => room.name).sort((left, right) => left.localeCompare(right)), [rooms]);
+
+  const roomCapacityMap = useMemo(
+    () => Object.fromEntries(rooms.map((room) => [room.name, room.capacity])),
+    [rooms],
+  );
+
   const filteredRooms = useMemo(() => {
     const normalized = roomSearch.trim().toLowerCase();
     return normalized ? roomDirectory.filter((room) => room.toLowerCase().includes(normalized)) : roomDirectory;
-  }, [roomSearch]);
+  }, [roomDirectory, roomSearch]);
 
   const filteredExamCatalogSubjects = useMemo(
     () =>
@@ -204,14 +231,14 @@ export function SchedulingManagerPage() {
         label: isSelected ? `✓ ${option.label}` : option.label,
       };
     });
-  }, [examFilters.examType, examFilters.semester, examProgramPlans]);
+  }, [examFilters.examType, examFilters.semester, examProgramPlans, studyProgramOptions]);
 
   const filteredGlobalExamRooms = useMemo(() => {
     const normalized = globalExamRoomSearch.trim().toLowerCase();
     return normalized
       ? roomDirectory.filter((room) => room.toLowerCase().includes(normalized))
       : roomDirectory;
-  }, [globalExamRoomSearch]);
+  }, [globalExamRoomSearch, roomDirectory]);
 
   const activeExamProgram = useMemo(
     () => examProgramPlans.find((program) => program.id === activeExamProgramId) ?? null,
@@ -221,6 +248,79 @@ export function SchedulingManagerPage() {
   const handleExamFilterChange = (field: keyof ExamFilterForm, value: string) => {
     setExamFilters((prev) => ({ ...prev, [field]: value }));
   };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadDraftSummary = async () => {
+      try {
+        const [draftSummary, confirmedSummary] = await Promise.all([
+          listClassDraftSummary(),
+          listConfirmedClassScheduleSummary(),
+        ]);
+        if (cancelled) {
+          return;
+        }
+
+        const nextDraftMap: Record<string, number> = {};
+        for (const item of draftSummary) {
+          nextDraftMap[item.program_value] = item.draft_count;
+        }
+
+        const nextConfirmedMap: Record<string, number> = {};
+        for (const item of confirmedSummary) {
+          nextConfirmedMap[item.program_value] = item.confirmed_count;
+        }
+
+        setDraftCountByProgram(nextDraftMap);
+        setConfirmedCountByProgram(nextConfirmedMap);
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to load schedule summary', error);
+        }
+      }
+    };
+
+    void loadDraftSummary();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const openExistingDraftIfAny = async () => {
+      if (activeTab !== 'Schedule Class' || !selectedStudyProgram) {
+        return;
+      }
+
+      try {
+        setIsCheckingExistingDraft(true);
+        const existingDraft = await getLatestClassScheduleDraft(selectedStudyProgram);
+        if (cancelled) {
+          return;
+        }
+        navigate(`/scheduling-draft?snapshotId=${existingDraft.id}`);
+      } catch (error) {
+        const statusCode = (error as AxiosError)?.response?.status;
+        if (!cancelled && statusCode && statusCode !== 404) {
+          console.error('Failed to check existing draft', error);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsCheckingExistingDraft(false);
+        }
+      }
+    };
+
+    void openExistingDraftIfAny();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, navigate, selectedStudyProgram]);
 
   const getOptionLabel = (options: SelectOption[], value: string, fallback = 'N/A') =>
     options.find((option) => option.value === value)?.label ?? fallback;
@@ -442,6 +542,69 @@ export function SchedulingManagerPage() {
   const canGenerateExamSchedule =
     examProgramPlans.length > 0 && globalExamDates.length > 0 && globalExamSelectedRooms.length > 0;
 
+  const studyProgramOptionsWithDraftFlag = useMemo(
+    () =>
+      studyProgramOptions.map((option) => {
+        if (!option.value) {
+          return option;
+        }
+
+        const draftCount = draftCountByProgram[option.value] ?? 0;
+        if (draftCount > 0) {
+          return {
+            ...option,
+            label: `${option.label} (draft)`,
+          };
+        }
+
+        const confirmedCount = confirmedCountByProgram[option.value] ?? 0;
+        if (confirmedCount > 0) {
+          return {
+            ...option,
+            label: `${option.label} (scheduled)`,
+          };
+        }
+
+        return option;
+      }),
+    [confirmedCountByProgram, draftCountByProgram],
+  );
+
+  const studyProgramOptionColorByValue = useMemo(() => {
+    const colorMap: Record<string, string> = {};
+    for (const option of studyProgramOptions) {
+      if (!option.value) {
+        continue;
+      }
+      if ((draftCountByProgram[option.value] ?? 0) > 0) {
+        colorMap[option.value] = '#dc2626';
+      }
+    }
+    return colorMap;
+  }, [draftCountByProgram]);
+
+  const handleGenerateClassSchedule = async () => {
+    if (!selectedStudyProgram || selectedProgramCourseCount === 0) {
+      return;
+    }
+
+    try {
+      setIsGeneratingClassSchedule(true);
+      const result = await generateClassSchedule({
+        program_value: selectedStudyProgram,
+        selected_room_names: selectedRooms,
+        constraints,
+        preferred_timeslot_by_course_id: preferredTimeslotByCourseId,
+      });
+
+      if (result.snapshot_id) {
+        navigate(`/scheduling-draft?snapshotId=${result.snapshot_id}&jobId=${result.job_id}`);
+      }
+    } finally {
+      setIsGeneratingClassSchedule(false);
+    }
+  };
+
   return (
     <>
       <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Scheduling Manager</h1>
@@ -458,7 +621,8 @@ export function SchedulingManagerPage() {
         <ScheduleClassTab
           selectedStudyProgram={selectedStudyProgram}
           setSelectedStudyProgram={setSelectedStudyProgram}
-          studyProgramOptions={studyProgramOptions}
+          studyProgramOptions={studyProgramOptionsWithDraftFlag}
+          studyProgramOptionColorByValue={studyProgramOptionColorByValue}
           selectedProgramCourseCount={selectedProgramCourseCount}
           selectedProgramYearPlans={selectedProgramYearPlans}
           getPreferredTimeslotOptions={getPreferredTimeslotOptions}
@@ -473,6 +637,8 @@ export function SchedulingManagerPage() {
           removeRoom={removeRoom}
           constraints={constraints}
           toggleConstraint={toggleConstraint}
+          isGenerating={isGeneratingClassSchedule || isCheckingExistingDraft}
+          onGenerate={handleGenerateClassSchedule}
         />
       )}
 

@@ -1,4 +1,4 @@
-import { BookOpen, CalendarClock, MessageSquare } from 'lucide-react';
+import { BookOpen, CalendarCheck2, CalendarClock, MessageSquare } from 'lucide-react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { ResourcesCatalogProvider } from '../contexts/ResourcesCatalogContext';
 import { Sidebar } from '../components/Sidebar';
@@ -10,6 +10,10 @@ const sidebarRoutes = [
   { label: 'Chat', path: chatRoute, icon: MessageSquare },
   { label: 'Scheduling Manager', path: '/scheduling-manager', icon: CalendarClock },
   { label: 'Resources', path: '/resources', icon: BookOpen },
+] as const;
+
+const generatedSidebarRoutes = [
+  { label: 'Generated Class Schedules', path: '/generated-class-schedules', icon: CalendarCheck2 },
 ] as const;
 
 const isResourcesRoute = (pathname: string) => pathname === '/resources' || pathname.startsWith('/programs/');
@@ -30,15 +34,26 @@ export function DashboardLayout() {
           <Sidebar
             brand="TempusAI"
             onNewConversation={handleNewConversation}
-            items={sidebarRoutes.map((route) => ({
-              label: route.label,
-              icon: route.icon,
-              active:
-                route.path === '/resources'
-                  ? isResourcesRoute(location.pathname)
-                  : location.pathname === route.path,
-              onClick: () => navigate(route.path),
-            }))}
+            items={[
+              ...sidebarRoutes.map((route) => ({
+                type: 'link' as const,
+                label: route.label,
+                icon: route.icon,
+                active:
+                  route.path === '/resources'
+                    ? isResourcesRoute(location.pathname)
+                    : location.pathname === route.path,
+                onClick: () => navigate(route.path),
+              })),
+              { type: 'divider' as const, label: 'Generated' },
+              ...generatedSidebarRoutes.map((route) => ({
+                type: 'link' as const,
+                label: route.label,
+                icon: route.icon,
+                active: location.pathname === route.path,
+                onClick: () => navigate(route.path),
+              })),
+            ]}
           />
 
           <main

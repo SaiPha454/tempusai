@@ -38,6 +38,10 @@ openapi_tags = [
         "name": "resources-program-year-plans",
         "description": "Program-year planning rows (program, year, course, professor).",
     },
+    {
+        "name": "scheduling-class",
+        "description": "Class schedule generation, draft retrieval, and draft editing operations.",
+    },
 ]
 
 

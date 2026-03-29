@@ -6,6 +6,7 @@
   color: #111827;
   background-color: #f9fafb;
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color-scheme: light;
 }
 
 * {
@@ -22,6 +23,17 @@ button,
 input,
 select {
   font: inherit;
+}
+
+select {
+  color-scheme: light;
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+option {
+  background-color: #ffffff;
+  color: #0f172a;
 }
 
 .hide-scrollbar {

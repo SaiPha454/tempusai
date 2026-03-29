@@ -13,6 +13,7 @@ import {
   listProgramYearRows,
   listPrograms,
   listProfessors,
+  listRooms,
   listTimeslots,
   type ProgramYearRowDto,
 } from '../api/resources';
@@ -26,6 +27,7 @@ export type CourseResource = {
 };
 export type ProfessorResource = { id: string; name: string; availableSlotIds: string[] };
 export type TimeslotResource = { id: string; day: string; label: string };
+export type RoomResource = { id: string; name: string; capacity: number };
 export type ProgramYearCourse = {
   id: string;
   code: string;
@@ -47,6 +49,8 @@ type ResourcesCatalogContextValue = {
   setProfessors: Dispatch<SetStateAction<ProfessorResource[]>>;
   timeslots: TimeslotResource[];
   setTimeslots: Dispatch<SetStateAction<TimeslotResource[]>>;
+  rooms: RoomResource[];
+  setRooms: Dispatch<SetStateAction<RoomResource[]>>;
   programYearPlans: ProgramYearPlansByProgram;
   setProgramYearPlans: Dispatch<SetStateAction<ProgramYearPlansByProgram>>;
 };
@@ -83,6 +87,7 @@ export function ResourcesCatalogProvider({ children }: { children: ReactNode }) 
   const [courses, setCourses] = useState<CourseResource[]>([]);
   const [professors, setProfessors] = useState<ProfessorResource[]>([]);
   const [timeslots, setTimeslots] = useState<TimeslotResource[]>([]);
+  const [rooms, setRooms] = useState<RoomResource[]>([]);
   const [programYearPlans, setProgramYearPlans] = useState<ProgramYearPlansByProgram>({});
 
   useEffect(() => {
@@ -90,11 +95,12 @@ export function ResourcesCatalogProvider({ children }: { children: ReactNode }) 
 
     const loadCatalog = async () => {
       try {
-        const [programList, courseList, professorList, timeslotList, planRows] = await Promise.all([
+        const [programList, courseList, professorList, timeslotList, roomList, planRows] = await Promise.all([
           listPrograms(),
           listCourses(),
           listProfessors(),
           listTimeslots(),
+          listRooms(),
           listProgramYearRows(),
         ]);
 
@@ -119,6 +125,7 @@ export function ResourcesCatalogProvider({ children }: { children: ReactNode }) 
           })),
         );
         setTimeslots(timeslotList.map((item) => ({ id: item.id, day: item.day, label: item.label })));
+        setRooms(roomList.map((item) => ({ id: item.id, name: item.name, capacity: item.capacity })));
         setProgramYearPlans(mapProgramYearRowsToPlans(planRows));
       } catch (error) {
         console.error('Failed to load resource catalog from backend', error);
@@ -142,10 +149,12 @@ export function ResourcesCatalogProvider({ children }: { children: ReactNode }) 
       setProfessors,
       timeslots,
       setTimeslots,
+      rooms,
+      setRooms,
       programYearPlans,
       setProgramYearPlans,
     }),
-    [programs, courses, professors, timeslots, programYearPlans],
+    [programs, courses, professors, timeslots, rooms, programYearPlans],
   );
 
   return <ResourcesCatalogContext.Provider value={value}>{children}</ResourcesCatalogContext.Provider>;

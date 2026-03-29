@@ -35,6 +35,7 @@ type ScheduleClassTabProps = {
   selectedStudyProgram: string;
   setSelectedStudyProgram: (value: string) => void;
   studyProgramOptions: SelectOption[];
+  studyProgramOptionColorByValue?: Record<string, string>;
   selectedProgramCourseCount: number;
   selectedProgramYearPlans: ProgramYearPlan[];
   getPreferredTimeslotOptions: (professorName: string) => Array<{ value: string; label: string }>;
@@ -56,12 +57,15 @@ type ScheduleClassTabProps = {
       | 'flexibleSlotFallback'
       | 'studentGroupsNoOverlap',
   ) => void;
+  isGenerating: boolean;
+  onGenerate: () => void;
 };
 
 export function ScheduleClassTab({
   selectedStudyProgram,
   setSelectedStudyProgram,
   studyProgramOptions,
+  studyProgramOptionColorByValue,
   selectedProgramCourseCount,
   selectedProgramYearPlans,
   getPreferredTimeslotOptions,
@@ -76,6 +80,8 @@ export function ScheduleClassTab({
   removeRoom,
   constraints,
   toggleConstraint,
+  isGenerating,
+  onGenerate,
 }: ScheduleClassTabProps) {
   return (
     <div className="mt-6 space-y-6 pb-8">
@@ -85,6 +91,7 @@ export function ScheduleClassTab({
             value={selectedStudyProgram}
             onChange={setSelectedStudyProgram}
             options={studyProgramOptions}
+            optionColorByValue={studyProgramOptionColorByValue}
           />
         </div>
       </Card>
@@ -199,10 +206,11 @@ export function ScheduleClassTab({
       <div className="flex justify-end">
         <button
           type="button"
-          disabled={selectedRooms.length === 0 || selectedProgramCourseCount === 0}
+          onClick={onGenerate}
+          disabled={isGenerating || selectedRooms.length === 0 || selectedProgramCourseCount === 0}
           className="rounded-xl bg-[#0A64BC] px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0959A8] active:bg-[#074B8C] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:hover:bg-slate-300"
         >
-          Generate Schedule
+          {isGenerating ? 'Generating...' : 'Generate Schedule'}
         </button>
       </div>
     </div>

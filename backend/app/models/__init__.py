@@ -5,6 +5,9 @@ from app.models.resource import (
     Program,
     ProgramYearCourse,
     Room,
+    ScheduleClassEntry,
+    ScheduleClassSnapshot,
+    ScheduleGenerationJob,
     SpecialEnrollment,
     SpecialEnrollmentCourse,
     Student,
@@ -22,4 +25,7 @@ __all__ = [
     "SpecialEnrollment",
     "SpecialEnrollmentCourse",
     "ProgramYearCourse",
+    "ScheduleClassSnapshot",
+    "ScheduleClassEntry",
+    "ScheduleGenerationJob",
 ]
