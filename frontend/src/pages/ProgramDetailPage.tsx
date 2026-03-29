@@ -1,9 +1,9 @@
-import { ArrowLeft, BookOpen, Check, Pencil, Plus, Search, Trash2 } from 'lucide-react';
+import { ArrowLeft, BookOpen, Check, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Card } from '../components/Card';
 import { useResourcesCatalog } from '../contexts/ResourcesCatalogContext';
-import { createProgramYearRow, deleteProgramYearRow, updateProgramYearRow } from '../api/resources';
+import { createProgramYearRow, deleteProgramYearRow, updateProgram, updateProgramYearRow } from '../api/resources';
 
 type YearCourse = {
   id: string;
@@ -116,7 +116,7 @@ function buildInitialPlan(): YearPlan[] {
 export function ProgramDetailPage() {
   const navigate = useNavigate();
   const { programId } = useParams<{ programId: string }>();
-  const { programs, courses, professors, programYearPlans, setProgramYearPlans } = useResourcesCatalog();
+  const { programs, setPrograms, courses, professors, programYearPlans, setProgramYearPlans } = useResourcesCatalog();
 
   const normalizedProgramId = useMemo(() => toProgramValue(decodeURIComponent(programId ?? '')), [programId]);
 
@@ -165,6 +165,9 @@ export function ProgramDetailPage() {
 
   const yearPlans = programYearPlans[programValue] ?? buildInitialPlan();
   const [editingCourseIds, setEditingCourseIds] = useState<Record<string, boolean>>({});
+  const [isEditingProgramName, setIsEditingProgramName] = useState(false);
+  const [programNameInput, setProgramNameInput] = useState(programLabel);
+  const [isSavingProgramName, setIsSavingProgramName] = useState(false);
   const [addDrafts, setAddDrafts] = useState<Record<number, AddCourseDraft>>({
     1: { courseCode: '', courseName: '', professorName: '' },
     2: { courseCode: '', courseName: '', professorName: '' },
@@ -177,6 +180,12 @@ export function ProgramDetailPage() {
 
   const findCourseByCode = (code: string) => courseOptions.find((item) => item.code === code);
   const findCourseByName = (name: string) => courseOptions.find((item) => item.name === name);
+
+  useEffect(() => {
+    if (!isEditingProgramName) {
+      setProgramNameInput(programLabel);
+    }
+  }, [isEditingProgramName, programLabel]);
 
   const setYearPlans = (updater: (prev: YearPlan[]) => YearPlan[]) => {
     setProgramYearPlans((prev) => ({
@@ -282,6 +291,48 @@ export function ProgramDetailPage() {
     }
   };
 
+  const saveProgramName = async () => {
+    if (!program) {
+      return;
+    }
+
+    const normalizedLabel = programNameInput.trim();
+    if (!normalizedLabel) {
+      return;
+    }
+
+    setIsSavingProgramName(true);
+    try {
+      const updated = await updateProgram(program.id, { label: normalizedLabel });
+
+      setPrograms((prev) =>
+        prev.map((item) =>
+          item.id === program.id
+            ? { id: updated.id, value: updated.value, label: updated.label }
+            : item,
+        ),
+      );
+
+      if (updated.value !== programValue) {
+        setProgramYearPlans((prev) => {
+          const cloned = { ...prev };
+          const previousPlans = cloned[programValue] ?? buildInitialPlan();
+          cloned[updated.value] = previousPlans;
+          delete cloned[programValue];
+          return cloned;
+        });
+
+        navigate(`/programs/${encodeURIComponent(updated.value)}`, { replace: true });
+      }
+
+      setIsEditingProgramName(false);
+    } catch (error) {
+      console.error('Failed to update program name', error);
+    } finally {
+      setIsSavingProgramName(false);
+    }
+  };
+
   return (
     <div className="mx-auto w-full max-w-6xl pb-8">
       <button
@@ -293,7 +344,52 @@ export function ProgramDetailPage() {
       </button>
 
       <div className="mt-4">
-        <h1 className="text-3xl font-semibold tracking-tight text-slate-900">{programLabel}</h1>
+        <div className="flex items-center gap-2">
+          {isEditingProgramName ? (
+            <div className="flex w-full items-center gap-2">
+              <input
+                value={programNameInput}
+                onChange={(event) => setProgramNameInput(event.target.value)}
+                className="h-10 w-full max-w-xl rounded-md border border-slate-300 bg-white px-3 text-2xl font-semibold tracking-tight text-slate-900 outline-none transition focus:border-[#0A64BC]"
+                placeholder="Program name"
+                disabled={isSavingProgramName}
+              />
+              <button
+                type="button"
+                onClick={() => void saveProgramName()}
+                disabled={isSavingProgramName || !programNameInput.trim()}
+                className="inline-flex h-9 w-9 items-center justify-center rounded p-1.5 text-slate-500 transition hover:bg-slate-100 hover:text-[#0A64BC] disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Save program name"
+              >
+                <Check size={16} />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setProgramNameInput(programLabel);
+                  setIsEditingProgramName(false);
+                }}
+                disabled={isSavingProgramName}
+                className="inline-flex h-9 w-9 items-center justify-center rounded p-1.5 text-slate-500 transition hover:bg-slate-100 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Cancel editing program name"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          ) : (
+            <>
+              <h1 className="text-3xl font-semibold tracking-tight text-slate-900">{programLabel}</h1>
+              <button
+                type="button"
+                onClick={() => setIsEditingProgramName(true)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded p-1.5 text-slate-500 transition hover:bg-slate-100 hover:text-[#0A64BC]"
+                aria-label="Edit program name"
+              >
+                <Pencil size={14} />
+              </button>
+            </>
+          )}
+        </div>
         <p className="mt-1 text-sm text-slate-500">Manage yearly study plan, courses, and professor assignments.</p>
       </div>
 
