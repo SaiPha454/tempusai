@@ -18,7 +18,7 @@ class PrologCourseRow:
 
 
 class PrologClassScheduler:
-    def __init__(self, timeout_seconds: int = 20) -> None:
+    def __init__(self, timeout_seconds: int = 45) -> None:
         self.timeout_seconds = timeout_seconds
         self._swipl = shutil.which("swipl")
         self._solver_path = Path(__file__).with_name("class_scheduler.pl")

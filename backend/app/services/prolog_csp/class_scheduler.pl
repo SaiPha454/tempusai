@@ -11,6 +11,32 @@
 :- dynamic constraint_student_groups_no_overlap/1.
 :- dynamic constraint_room_capacity_check/1.
 
+solve(true).
+solve((A, B)) :-
+    solve(A),
+    solve(B).
+solve((Cond -> Then ; Else)) :-
+    !,
+    (solve(Cond) -> solve(Then) ; solve(Else)).
+solve((Cond -> Then)) :-
+    !,
+    (solve(Cond) -> solve(Then)).
+solve((A ; B)) :-
+    !,
+    (solve(A) ; solve(B)).
+solve(\+ Goal) :-
+    \+ solve(Goal).
+solve(solve(Goal)) :-
+    !,
+    solve(Goal).
+solve(Goal) :-
+    predicate_property(Goal, built_in),
+    !,
+    call(Goal).
+solve(Goal) :-
+    clause(Goal, Body),
+    solve(Body).
+
 room_available(Room, Slot) :-
     \+ scheduled(_, _, _, Room, Slot),
     \+ reserved_room(Room, Slot).
@@ -31,11 +57,22 @@ candidate(Course, Prof, Year, Room, Slot) :-
     course(Course, Prof, Year, _),
     time_slot(Slot),
     room(Room, _),
-    capacity_ok(Course, Room),
-    room_available(Room, Slot),
-    (constraint_professor_no_overlap(true) -> professor_available(Prof, Slot) ; true),
-    (constraint_student_groups_no_overlap(true) -> year_available(Year, Slot) ; true),
-    \+ scheduled(Course, _, _, _, _).
+    meta_constraint_checks(Course, Prof, Year, Room, Slot).
+
+meta_constraint_checks(Course, Prof, Year, Room, Slot) :-
+    solve((
+        capacity_ok(Course, Room),
+        room_available(Room, Slot),
+        professor_constraint_ok(Prof, Slot),
+        year_constraint_ok(Year, Slot),
+        \+ scheduled(Course, _, _, _, _)
+    )).
+
+professor_constraint_ok(Prof, Slot) :-
+    (constraint_professor_no_overlap(true) -> professor_available(Prof, Slot) ; true).
+
+year_constraint_ok(Year, Slot) :-
+    (constraint_student_groups_no_overlap(true) -> year_available(Year, Slot) ; true).
 
 preferred_candidate(Course, Prof, Year, Room, Slot) :-
     candidate(Course, Prof, Year, Room, Slot),
@@ -119,6 +156,9 @@ solve_best_effort :-
 try_solve_all_with_timeout(Seconds) :-
     catch(call_with_time_limit(Seconds, solve_all), _, fail).
 
+try_solve_best_effort_with_timeout(Seconds) :-
+    catch(call_with_time_limit(Seconds, solve_best_effort), _, true).
+
 print_schedule :-
     forall(
         scheduled(Course, Prof, Year, Room, Slot),
@@ -127,5 +167,5 @@ print_schedule :-
 
 solve_and_print :-
     retractall(scheduled(_, _, _, _, _)),
-    (try_solve_all_with_timeout(6) -> true ; solve_best_effort),
+    (try_solve_all_with_timeout(20) -> true ; try_solve_best_effort_with_timeout(6)),
     print_schedule.
