@@ -1,10 +1,13 @@
 import { CalendarDays } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Card } from '../../components/Card';
 import { SelectField } from '../../components/SelectField';
 import { MultiSelectDropdown } from '../../components/MultiSelectDropdown';
 import { RoomSelector } from '../../components/RoomSelector';
 import { SelectedChipSummary } from '../../components/SelectedChipSummary';
 import { ToggleSwitch } from '../../components/ToggleSwitch';
+
+const ESTIMATED_GENERATION_SECONDS = 45;
 
 type SelectOption = {
   value: string;
@@ -83,6 +86,25 @@ export function ScheduleClassTab({
   isGenerating,
   onGenerate,
 }: ScheduleClassTabProps) {
+  const [remainingSeconds, setRemainingSeconds] = useState(ESTIMATED_GENERATION_SECONDS);
+
+  useEffect(() => {
+    if (!isGenerating) {
+      setRemainingSeconds(ESTIMATED_GENERATION_SECONDS);
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setRemainingSeconds((previous) => Math.max(0, previous - 1));
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [isGenerating]);
+
+  const progressWidth = `${Math.round((remainingSeconds / ESTIMATED_GENERATION_SECONDS) * 100)}%`;
+
   return (
     <div className="mt-6 space-y-6 pb-8">
       <Card title="Study Program">
@@ -204,14 +226,33 @@ export function ScheduleClassTab({
       </Card>
 
       <div className="flex justify-end">
-        <button
-          type="button"
-          onClick={onGenerate}
-          disabled={isGenerating || selectedRooms.length === 0 || selectedProgramCourseCount === 0}
-          className="rounded-xl bg-[#0A64BC] px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0959A8] active:bg-[#074B8C] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:hover:bg-slate-300"
-        >
-          {isGenerating ? 'Generating...' : 'Generate Schedule'}
-        </button>
+        <div className="w-full max-w-sm">
+          {isGenerating ? (
+            <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-center justify-between text-xs font-medium text-slate-600">
+                <span>Scheduling in progress</span>
+                <span>~{remainingSeconds}s left</span>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                <div
+                  className="h-full rounded-full bg-[#0A64BC] transition-all duration-1000 ease-linear"
+                  style={{ width: progressWidth }}
+                />
+              </div>
+            </div>
+          ) : null}
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={onGenerate}
+              disabled={isGenerating || selectedRooms.length === 0 || selectedProgramCourseCount === 0}
+              className="rounded-xl bg-[#0A64BC] px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0959A8] active:bg-[#074B8C] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:hover:bg-slate-300"
+            >
+              {isGenerating ? 'Generating...' : 'Generate Schedule'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
