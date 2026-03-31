@@ -32,6 +32,26 @@ const conflictMessageByCode: Record<string, string> = {
   room_capacity_exceeded: 'Room capacity is smaller than expected enrollment.',
 };
 
+const yearCardStyles: Record<number, { container: string; badge: string }> = {
+  // Year progression palette: foundation -> growth -> specialization -> capstone
+  1: {
+    container: 'border-sky-200 bg-sky-50 border-l-4 border-l-sky-500',
+    badge: 'bg-sky-100 text-sky-800',
+  },
+  2: {
+    container: 'border-emerald-200 bg-emerald-50 border-l-4 border-l-emerald-500',
+    badge: 'bg-emerald-100 text-emerald-800',
+  },
+  3: {
+    container: 'border-fuchsia-200 bg-fuchsia-50 border-l-4 border-l-fuchsia-500',
+    badge: 'bg-fuchsia-100 text-fuchsia-800',
+  },
+  4: {
+    container: 'border-indigo-200 bg-indigo-50 border-l-4 border-l-indigo-500',
+    badge: 'bg-indigo-100 text-indigo-800',
+  },
+};
+
 const dayAliases: Record<string, (typeof daysOfWeek)[number]> = {
   mon: 'Monday',
   monday: 'Monday',
@@ -703,6 +723,11 @@ export function ScheduleDraftPage() {
     options: { showRoom?: boolean; showYear?: boolean; enableRoomDropdown?: boolean } = {},
   ) => {
     const { showRoom = true, showYear = false, enableRoomDropdown = false } = options;
+    const yearStyle = yearCardStyles[entry.year] ?? {
+      container: 'border-slate-200 bg-slate-50',
+      badge: 'bg-slate-200 text-slate-700',
+    };
+
     return (
       <div
         key={entry.id}
@@ -712,11 +737,15 @@ export function ScheduleDraftPage() {
           setActiveConflictPopover(null);
         }}
         onDragEnd={() => setDraggingEntryId(null)}
-        className="cursor-move rounded-md border border-slate-200 bg-slate-50 p-2"
+        className={`cursor-move rounded-md border p-2 ${yearStyle.container}`}
       >
         <p className="text-xs font-semibold text-slate-900">{entry.course_code}</p>
         <p className="text-xs text-slate-700">{entry.course_name}</p>
-        {showYear && <p className="text-[11px] text-slate-500">Year {entry.year}</p>}
+        {showYear && (
+          <p className={`mt-1 inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold ${yearStyle.badge}`}>
+            Year {entry.year}
+          </p>
+        )}
         {enableRoomDropdown ? (
           <div className="mt-1">
             <label className="mb-1 block text-[10px] font-medium text-slate-500">Room</label>
