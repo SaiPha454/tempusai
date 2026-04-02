@@ -45,6 +45,7 @@ type ExamFilterForm = {
 type ExamConstraintState = {
   noTwoSubjectsSameDay: boolean;
   noTwoSubjectsSameTimeslot: boolean;
+  noStudentSameDayTimeslot: boolean;
   prioritizePreferredDayAndTimeslot: boolean;
   fallbackFlexibleWhenUnavailable: boolean;
 };
@@ -102,10 +103,15 @@ type ScheduleExamTabProps = {
     key:
       | 'noTwoSubjectsSameDay'
       | 'noTwoSubjectsSameTimeslot'
+        | 'noStudentSameDayTimeslot'
       | 'prioritizePreferredDayAndTimeslot'
       | 'fallbackFlexibleWhenUnavailable',
   ) => void;
   canGenerateExamSchedule: boolean;
+  totalExamSubjects: number;
+  examValidationMessage: string | null;
+  isGeneratingExamSchedule: boolean;
+  onGenerateExamSchedule: () => void;
 };
 
 export function ScheduleExamTab({
@@ -149,6 +155,10 @@ export function ScheduleExamTab({
   examConstraints,
   toggleExamConstraint,
   canGenerateExamSchedule,
+  totalExamSubjects,
+  examValidationMessage,
+  isGeneratingExamSchedule,
+  onGenerateExamSchedule,
 }: ScheduleExamTabProps) {
   return (
     <div className="mt-6 space-y-6 pb-8">
@@ -239,7 +249,7 @@ export function ScheduleExamTab({
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-slate-500">
-            {filteredExamCatalogSubjects.length} matching subject(s) across Year 1-4.
+            {filteredExamCatalogSubjects.length} matching subject(s) from selected program year plans.
           </p>
           <button
             type="button"
@@ -430,37 +440,81 @@ export function ScheduleExamTab({
       )}
 
       <Card title="Constraint rules">
+        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+          <p>
+            <span className="font-semibold text-slate-900">Hard constraints:</span> same program/year cannot share
+            the same day and slot, one student cannot have two exams at the same day/slot, and room capacity is
+            enforced.
+          </p>
+          <p className="mt-1">
+            <span className="font-semibold text-slate-900">Soft constraints:</span> preferred day and slot are
+            prioritized, but may be relaxed when no feasible allocation exists.
+          </p>
+        </div>
         <div className="grid grid-cols-1 gap-x-8 gap-y-4 md:grid-cols-2">
           <ToggleSwitch
-            label="Two subjects cannot be on the same day"
+            label="Same program/year cannot be on the same day"
             checked={examConstraints.noTwoSubjectsSameDay}
             onChange={() => toggleExamConstraint('noTwoSubjectsSameDay')}
+            variant="hard"
           />
           <ToggleSwitch
-            label="Two subjects cannot be in the same timeslot"
+            label="Same program/year cannot be in the same timeslot"
             checked={examConstraints.noTwoSubjectsSameTimeslot}
             onChange={() => toggleExamConstraint('noTwoSubjectsSameTimeslot')}
+            variant="hard"
+          />
+          <ToggleSwitch
+            label="One student cannot have two exams on same day/timeslot"
+            checked={examConstraints.noStudentSameDayTimeslot}
+            onChange={() => toggleExamConstraint('noStudentSameDayTimeslot')}
+            variant="hard"
           />
           <ToggleSwitch
             label="Prioritize preferred day and timeslot"
             checked={examConstraints.prioritizePreferredDayAndTimeslot}
             onChange={() => toggleExamConstraint('prioritizePreferredDayAndTimeslot')}
+            variant="soft"
           />
           <ToggleSwitch
             label="Fallback when preferred slot is unavailable (flexible)"
             checked={examConstraints.fallbackFlexibleWhenUnavailable}
             onChange={() => toggleExamConstraint('fallbackFlexibleWhenUnavailable')}
+            variant="soft"
           />
+        </div>
+      </Card>
+
+      <Card title="Generation Review">
+        <div className="space-y-2 text-sm text-slate-700">
+          <p>
+            Programs selected: <span className="font-semibold text-slate-900">{examProgramPlans.length}</span>
+          </p>
+          <p>
+            Subjects queued: <span className="font-semibold text-slate-900">{totalExamSubjects}</span>
+          </p>
+          <p>
+            Exam dates selected: <span className="font-semibold text-slate-900">{globalExamDates.length}</span>
+          </p>
+          <p>
+            Exam rooms selected: <span className="font-semibold text-slate-900">{globalExamSelectedRooms.length}</span>
+          </p>
+          {examValidationMessage && (
+            <p className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs font-medium text-rose-700">
+              {examValidationMessage}
+            </p>
+          )}
         </div>
       </Card>
 
       <div className="flex justify-end">
         <button
           type="button"
-          disabled={!canGenerateExamSchedule}
+          onClick={onGenerateExamSchedule}
+          disabled={!canGenerateExamSchedule || isGeneratingExamSchedule}
           className="rounded-xl bg-[#0A64BC] px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0959A8] active:bg-[#074B8C] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:hover:bg-slate-300"
         >
-          Generate Exam Schedule
+          {isGeneratingExamSchedule ? 'Generating Exam Schedule...' : 'Generate Exam Schedule'}
         </button>
       </div>
     </div>
