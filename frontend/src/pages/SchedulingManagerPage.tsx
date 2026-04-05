@@ -6,9 +6,13 @@ import { useResourcesCatalog } from '../contexts/ResourcesCatalogContext';
 import {
   generateClassSchedule,
   generateExamSchedule,
+  getExamScheduleJob,
+  getLatestConfirmedClassSchedule,
   getLatestClassScheduleDraft,
   listClassDraftSummary,
   listConfirmedClassScheduleSummary,
+  listConfirmedExamScheduleSummary,
+  type ScheduleClassEntryDto,
 } from '../api/scheduling';
 import { ScheduleExamTab } from './scheduling/ScheduleExamTab';
 import { ScheduleClassTab } from './scheduling/ScheduleClassTab';
@@ -20,13 +24,7 @@ import {
 } from '../data/schedulingData';
 
 const schedulingTabs = ['Schedule Class', 'Schedule Exam'] as const;
-
-type ConstraintKey =
-  | 'prioritizeProfessorPreferences'
-  | 'professorNoOverlap'
-  | 'roomCapacityCheck'
-  | 'flexibleSlotFallback'
-  | 'studentGroupsNoOverlap';
+const CLASS_PREFS_STORAGE_PREFIX = 'classPreferredSlotsBySnapshot:';
 
 type ExamFilterForm = {
   studyProgram: string;
@@ -40,6 +38,7 @@ type ExamSubjectScheduleItem = {
   code: string;
   name: string;
   examType: string;
+  defaultPreferredWeekdays: number[];
   preferredDateValues: string[];
   preferredTimeSlots: string[];
   isDateCustom: boolean;
@@ -58,13 +57,6 @@ type ExamProgramPlan = {
   examType: string;
   years: ExamYearPlan[];
 };
-
-type ExamConstraintKey =
-  | 'noTwoSubjectsSameDay'
-  | 'noTwoSubjectsSameTimeslot'
-  | 'noStudentSameDayTimeslot'
-  | 'prioritizePreferredDayAndTimeslot'
-  | 'fallbackFlexibleWhenUnavailable';
 
 const initialExamFilters: ExamFilterForm = {
   studyProgram: '',
@@ -85,6 +77,91 @@ const formatIsoDateLabel = (isoDate: string) => {
   });
 };
 
+const normalizeWeekdayToMondayBasedIndex = (rawDay: string | null): number | null => {
+  if (!rawDay) {
+    return null;
+  }
+
+  const value = rawDay.trim().toLowerCase();
+  const dayMap: Record<string, number> = {
+    monday: 0,
+    mon: 0,
+    tuesday: 1,
+    tue: 1,
+    tues: 1,
+    wednesday: 2,
+    wed: 2,
+    thursday: 3,
+    thu: 3,
+    thur: 3,
+    thurs: 3,
+    friday: 4,
+    fri: 4,
+    saturday: 5,
+    sat: 5,
+    sunday: 6,
+    sun: 6,
+  };
+  return dayMap[value] ?? null;
+};
+
+const toMondayBasedWeekdayIndexFromIsoDate = (isoDate: string): number | null => {
+  const [year, month, day] = isoDate.split('-').map(Number);
+  if (!year || !month || !day) {
+    return null;
+  }
+  const parsed = new Date(year, month - 1, day);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  const sundayBased = parsed.getDay();
+  return (sundayBased + 6) % 7;
+};
+
+const deriveDefaultPreferredDates = (examDates: string[], preferredWeekdays: number[]): string[] => {
+  if (examDates.length === 0) {
+    return [];
+  }
+
+  if (preferredWeekdays.length === 0) {
+    return [...examDates];
+  }
+
+  const weekdaySet = new Set(preferredWeekdays);
+  const matched = examDates.filter((isoDate) => {
+    const weekday = toMondayBasedWeekdayIndexFromIsoDate(isoDate);
+    return weekday !== null && weekdaySet.has(weekday);
+  });
+
+  // If class weekday is outside selected exam period, fallback to all days.
+  if (matched.length === 0) {
+    return [...examDates];
+  }
+
+  return matched;
+};
+
+const sortTimeslotOptionsByWeekdayAndLabel = (options: Array<{ value: string; label: string }>) => {
+  return [...options].sort((left, right) => {
+    const [leftDayRaw] = left.label.split(' · ');
+    const [rightDayRaw] = right.label.split(' · ');
+    const leftDay = normalizeWeekdayToMondayBasedIndex(leftDayRaw ?? null);
+    const rightDay = normalizeWeekdayToMondayBasedIndex(rightDayRaw ?? null);
+
+    if (leftDay !== null && rightDay !== null && leftDay !== rightDay) {
+      return leftDay - rightDay;
+    }
+    if (leftDay !== null && rightDay === null) {
+      return -1;
+    }
+    if (leftDay === null && rightDay !== null) {
+      return 1;
+    }
+
+    return left.label.localeCompare(right.label);
+  });
+};
+
 export function SchedulingManagerPage() {
   const navigate = useNavigate();
   const { programs, professors, timeslots, rooms, programYearPlans } = useResourcesCatalog();
@@ -98,11 +175,15 @@ export function SchedulingManagerPage() {
   const [isCheckingExistingDraft, setIsCheckingExistingDraft] = useState(false);
   const [isGeneratingExamSchedule, setIsGeneratingExamSchedule] = useState(false);
   const [examGenerationError, setExamGenerationError] = useState<string | null>(null);
+  const [examJobName, setExamJobName] = useState('');
+  const [examGenerationStatus, setExamGenerationStatus] = useState<string | null>(null);
   const [draftCountByProgram, setDraftCountByProgram] = useState<Record<string, number>>({});
   const [confirmedCountByProgram, setConfirmedCountByProgram] = useState<Record<string, number>>({});
+  const [confirmedExamProgramValues, setConfirmedExamProgramValues] = useState<string[]>([]);
 
   const [examFilters, setExamFilters] = useState<ExamFilterForm>(initialExamFilters);
   const [examProgramPlans, setExamProgramPlans] = useState<ExamProgramPlan[]>([]);
+  const [confirmedClassEntriesByProgram, setConfirmedClassEntriesByProgram] = useState<Record<string, ScheduleClassEntryDto[]>>({});
   const [activeExamProgramId, setActiveExamProgramId] = useState<string | null>(null);
   const [globalExamDates, setGlobalExamDates] = useState<string[]>([]);
   const [globalExamRoomSearch, setGlobalExamRoomSearch] = useState('');
@@ -112,27 +193,11 @@ export function SchedulingManagerPage() {
   const [isExamRoomsExpanded, setIsExamRoomsExpanded] = useState(true);
   const programNavScrollRef = useRef<HTMLDivElement>(null);
 
-  const [constraints, setConstraints] = useState<Record<ConstraintKey, boolean>>({
-    prioritizeProfessorPreferences: true,
-    professorNoOverlap: true,
-    roomCapacityCheck: true,
-    flexibleSlotFallback: true,
-    studentGroupsNoOverlap: true,
-  });
-
-  const [examConstraints, setExamConstraints] = useState<Record<ExamConstraintKey, boolean>>({
-    noTwoSubjectsSameDay: true,
-    noTwoSubjectsSameTimeslot: true,
-    noStudentSameDayTimeslot: true,
-    prioritizePreferredDayAndTimeslot: true,
-    fallbackFlexibleWhenUnavailable: true,
-  });
-
   const defaultProgramYears = useMemo(
     () =>
       yearValues.map((year) => ({
         year,
-        courses: [] as Array<{ id: string; code: string; name: string; professorName: string }>,
+        courses: [] as Array<{ id: string; code: string; name: string; professorId: string | null; professorName: string }>,
       })),
     [],
   );
@@ -161,25 +226,26 @@ export function SchedulingManagerPage() {
     [timeslots],
   );
 
-  const professorByName = useMemo(
-    () => new Map(professors.map((professor) => [professor.name, professor])),
-    [professors],
-  );
+  const professorById = useMemo(() => new Map(professors.map((professor) => [professor.id, professor])), [professors]);
 
-  const getPreferredTimeslotOptions = (professorName: string) => {
-    const professor = professorByName.get(professorName);
+  const getPreferredTimeslotOptions = (professorId: string) => {
+    const professor = professorById.get(professorId);
     if (!professor) {
       return [] as Array<{ value: string; label: string }>;
     }
 
     const availableSlotIds = professor.availableSlotIds;
     if (availableSlotIds.length === 0 || availableSlotIds.includes(anyTimeOptionValue)) {
-      return timeslots.map((slot) => ({ value: slot.id, label: `${slot.day} · ${slot.label}` }));
+      return sortTimeslotOptionsByWeekdayAndLabel(
+        timeslots.map((slot) => ({ value: slot.id, label: `${slot.day} · ${slot.label}` })),
+      );
     }
 
-    return availableSlotIds
+    const options = availableSlotIds
       .map((slotId) => ({ value: slotId, label: timeslotLabelById.get(slotId) ?? slotId }))
       .filter((option) => Boolean(option.label));
+
+    return sortTimeslotOptionsByWeekdayAndLabel(options);
   };
 
   const studyProgramOptions = useMemo<SelectOption[]>(
@@ -207,24 +273,86 @@ export function SchedulingManagerPage() {
   const filteredExamCatalogSubjects = useMemo(
     () => {
       if (!examFilters.studyProgram) {
-        return [] as Array<{ id: string; code: string; name: string; year: string }>;
+        return [] as Array<{
+          id: string;
+          code: string;
+          name: string;
+          year: string;
+          defaultPreferredWeekdays: number[];
+          defaultPreferredDateValues: string[];
+        }>;
       }
 
-      const yearPlans = programYearPlans[examFilters.studyProgram] ?? [];
-      return yearPlans.flatMap((yearPlan) =>
-        yearPlan.courses.map((course) => ({
-          id: course.id,
-          code: course.code,
-          name: course.name,
-          year: String(yearPlan.year),
-        })),
-      );
+      if (confirmedExamProgramValues.includes(examFilters.studyProgram)) {
+        return [] as Array<{
+          id: string;
+          code: string;
+          name: string;
+          year: string;
+          defaultPreferredWeekdays: number[];
+          defaultPreferredDateValues: string[];
+        }>;
+      }
+
+      const classEntries = confirmedClassEntriesByProgram[examFilters.studyProgram] ?? [];
+      const dedup = new Map<
+        string,
+        {
+          id: string;
+          code: string;
+          name: string;
+          year: string;
+          weekdaySet: Set<number>;
+        }
+      >();
+
+      for (const entry of classEntries) {
+        if (!entry.program_year_course_id) {
+          continue;
+        }
+
+        const key = `${entry.course_id}-${entry.year}`;
+        const weekday = normalizeWeekdayToMondayBasedIndex(entry.day);
+        const existing = dedup.get(key);
+        if (!existing) {
+          dedup.set(key, {
+            id: entry.program_year_course_id,
+            code: entry.course_code,
+            name: entry.course_name,
+            year: String(entry.year),
+            weekdaySet: weekday !== null ? new Set([weekday]) : new Set<number>(),
+          });
+          continue;
+        }
+
+        if (weekday !== null) {
+          existing.weekdaySet.add(weekday);
+        }
+      }
+
+      return [...dedup.values()].map((subject) => {
+        const defaultPreferredWeekdays = [...subject.weekdaySet].sort((left, right) => left - right);
+        return {
+          id: subject.id,
+          code: subject.code,
+          name: subject.name,
+          year: subject.year,
+          defaultPreferredWeekdays,
+          defaultPreferredDateValues: deriveDefaultPreferredDates(globalExamDates, defaultPreferredWeekdays),
+        };
+      });
     },
-    [examFilters.studyProgram, programYearPlans],
+    [confirmedClassEntriesByProgram, confirmedExamProgramValues, examFilters.studyProgram, globalExamDates],
   );
 
+  const confirmedExamProgramValueSet = useMemo(() => new Set(confirmedExamProgramValues), [confirmedExamProgramValues]);
+
   const examStudyProgramOptions = useMemo(() => {
-    return studyProgramOptions.map((option) => {
+    const unscheduledOptions = studyProgramOptions.filter(
+      (option) => !option.value || !confirmedExamProgramValueSet.has(option.value),
+    );
+
+    return unscheduledOptions.map((option) => {
       if (!option.value) {
         return option;
       }
@@ -246,7 +374,7 @@ export function SchedulingManagerPage() {
         label: isSelected ? `✓ ${option.label}` : option.label,
       };
     });
-  }, [examFilters.examType, examFilters.semester, examProgramPlans, studyProgramOptions]);
+  }, [confirmedExamProgramValueSet, examFilters.examType, examFilters.semester, examProgramPlans, studyProgramOptions]);
 
   const filteredGlobalExamRooms = useMemo(() => {
     const normalized = globalExamRoomSearch.trim().toLowerCase();
@@ -266,16 +394,17 @@ export function SchedulingManagerPage() {
 
   useEffect(() => {
     setExamGenerationError(null);
-  }, [examFilters, examProgramPlans, globalExamDates, globalExamSelectedRooms, examConstraints]);
+  }, [examFilters, examProgramPlans, globalExamDates, globalExamSelectedRooms, examJobName]);
 
   useEffect(() => {
     let cancelled = false;
 
     const loadDraftSummary = async () => {
       try {
-        const [draftSummary, confirmedSummary] = await Promise.all([
+        const [draftSummary, confirmedSummary, confirmedExamSummary] = await Promise.all([
           listClassDraftSummary(),
           listConfirmedClassScheduleSummary(),
+          listConfirmedExamScheduleSummary(),
         ]);
         if (cancelled) {
           return;
@@ -291,8 +420,13 @@ export function SchedulingManagerPage() {
           nextConfirmedMap[item.program_value] = item.confirmed_count;
         }
 
+        const nextConfirmedExamPrograms = Array.from(
+          new Set(confirmedExamSummary.flatMap((item) => item.program_values)),
+        );
+
         setDraftCountByProgram(nextDraftMap);
         setConfirmedCountByProgram(nextConfirmedMap);
+        setConfirmedExamProgramValues(nextConfirmedExamPrograms);
       } catch (error) {
         if (!cancelled) {
           console.error('Failed to load schedule summary', error);
@@ -306,6 +440,61 @@ export function SchedulingManagerPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!examFilters.studyProgram) {
+      return;
+    }
+
+    if (!confirmedExamProgramValueSet.has(examFilters.studyProgram)) {
+      return;
+    }
+
+    setExamFilters((prev) => ({
+      ...prev,
+      studyProgram: '',
+    }));
+  }, [confirmedExamProgramValueSet, examFilters.studyProgram]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadConfirmedClassEntries = async () => {
+      const programValue = examFilters.studyProgram;
+      if (!programValue) {
+        return;
+      }
+
+      if (confirmedClassEntriesByProgram[programValue]) {
+        return;
+      }
+
+      try {
+        const draft = await getLatestConfirmedClassSchedule(programValue);
+        if (cancelled) {
+          return;
+        }
+        setConfirmedClassEntriesByProgram((prev) => ({
+          ...prev,
+          [programValue]: draft.entries,
+        }));
+      } catch {
+        if (cancelled) {
+          return;
+        }
+        setConfirmedClassEntriesByProgram((prev) => ({
+          ...prev,
+          [programValue]: [],
+        }));
+      }
+    };
+
+    void loadConfirmedClassEntries();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [confirmedClassEntriesByProgram, examFilters.studyProgram]);
 
   useEffect(() => {
     let cancelled = false;
@@ -354,22 +543,20 @@ export function SchedulingManagerPage() {
     setSelectedRooms((prev) => prev.filter((item) => item !== room));
   };
 
-  const toggleConstraint = (key: ConstraintKey) => {
-    setConstraints((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
-
-  const toggleExamConstraint = (key: ExamConstraintKey) => {
-    setExamConstraints((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
-
   const canAddExamProgram =
     Boolean(examFilters.studyProgram) &&
+    !confirmedExamProgramValueSet.has(examFilters.studyProgram) &&
     Boolean(examFilters.semester) &&
     Boolean(examFilters.examType) &&
     filteredExamCatalogSubjects.length > 0;
 
   const addExamProgramPlan = () => {
     if (!canAddExamProgram) {
+      return;
+    }
+
+    if (confirmedExamProgramValueSet.has(examFilters.studyProgram)) {
+      setExamGenerationError('This program already has a confirmed exam schedule. Please edit it from Generated Exam Schedules.');
       return;
     }
 
@@ -394,7 +581,8 @@ export function SchedulingManagerPage() {
         code: subject.code,
         name: subject.name,
         examType: examFilters.examType,
-        preferredDateValues: [...globalExamDates],
+        defaultPreferredWeekdays: [...subject.defaultPreferredWeekdays],
+        preferredDateValues: [...subject.defaultPreferredDateValues],
         preferredTimeSlots: [...defaultExamTimeSlotValues],
         isDateCustom: false,
         isTimeCustom: false,
@@ -478,7 +666,7 @@ export function SchedulingManagerPage() {
                   }
                 : {
                     ...subject,
-                    preferredDateValues: [...nextDates],
+                    preferredDateValues: deriveDefaultPreferredDates(nextDates, subject.defaultPreferredWeekdays),
                   },
             ),
           })),
@@ -513,7 +701,16 @@ export function SchedulingManagerPage() {
               ...yearPlan,
               subjects: yearPlan.subjects.map((subject) =>
                 subject.id === subjectId
-                  ? { ...subject, preferredDateValues: values, isDateCustom: true }
+                  ? values.length > 0
+                    ? { ...subject, preferredDateValues: values, isDateCustom: true }
+                    : {
+                        ...subject,
+                        preferredDateValues: deriveDefaultPreferredDates(
+                          globalExamDates,
+                          subject.defaultPreferredWeekdays,
+                        ),
+                        isDateCustom: false,
+                      }
                   : subject,
               ),
             }
@@ -569,9 +766,53 @@ export function SchedulingManagerPage() {
     [examProgramPlans],
   );
 
+  const examGenerationProgressPercent = useMemo(() => {
+    if (!isGeneratingExamSchedule) {
+      return 0;
+    }
+    const normalized = (examGenerationStatus ?? 'running').toLowerCase();
+    if (normalized === 'pending' || normalized === 'queued') {
+      return 20;
+    }
+    if (normalized === 'running') {
+      return 70;
+    }
+    if (normalized === 'succeeded') {
+      return 100;
+    }
+    if (normalized === 'failed') {
+      return 100;
+    }
+    return 50;
+  }, [examGenerationStatus, isGeneratingExamSchedule]);
+
+  const examGenerationStatusLabel = useMemo(() => {
+    if (!isGeneratingExamSchedule) {
+      return null;
+    }
+
+    const normalized = (examGenerationStatus ?? 'running').toLowerCase();
+    if (normalized === 'pending' || normalized === 'queued') {
+      return 'Queued in backend';
+    }
+    if (normalized === 'running') {
+      return 'Generating on backend';
+    }
+    if (normalized === 'succeeded') {
+      return 'Generation completed';
+    }
+    if (normalized === 'failed') {
+      return 'Generation failed';
+    }
+    return `Backend status: ${examGenerationStatus}`;
+  }, [examGenerationStatus, isGeneratingExamSchedule]);
+
   const examValidationMessage = useMemo(() => {
     if (examGenerationError) {
       return examGenerationError;
+    }
+    if (!examJobName.trim()) {
+      return 'Enter scheduling job name before generation.';
     }
     if (globalExamDates.length === 0) {
       return 'Select exam period dates before generation.';
@@ -586,15 +827,6 @@ export function SchedulingManagerPage() {
       return 'No subjects are queued. Add program subjects before generation.';
     }
 
-    const hasSubjectWithoutPreferredDate = examProgramPlans.some((program) =>
-      program.years.some((yearPlan) =>
-        yearPlan.subjects.some((subject) => subject.preferredDateValues.length === 0),
-      ),
-    );
-    if (hasSubjectWithoutPreferredDate) {
-      return 'Some subjects have no preferred date. Add preferred dates or keep full exam period defaults.';
-    }
-
     const hasSubjectWithoutTimeslot = examProgramPlans.some((program) =>
       program.years.some((yearPlan) =>
         yearPlan.subjects.some((subject) => subject.preferredTimeSlots.length === 0),
@@ -605,7 +837,7 @@ export function SchedulingManagerPage() {
     }
 
     return null;
-  }, [examGenerationError, examProgramPlans, globalExamDates.length, globalExamSelectedRooms.length, totalExamSubjects]);
+  }, [examGenerationError, examJobName, examProgramPlans, globalExamDates.length, globalExamSelectedRooms.length, totalExamSubjects]);
 
   const canGenerateExamSchedule =
     examValidationMessage === null;
@@ -661,11 +893,18 @@ export function SchedulingManagerPage() {
       const result = await generateClassSchedule({
         program_value: selectedStudyProgram,
         selected_room_names: selectedRooms,
-        constraints,
         preferred_timeslot_by_course_id: preferredTimeslotByCourseId,
       });
 
       if (result.snapshot_id) {
+        try {
+          sessionStorage.setItem(
+            `${CLASS_PREFS_STORAGE_PREFIX}${result.snapshot_id}`,
+            JSON.stringify(preferredTimeslotByCourseId),
+          );
+        } catch {
+          // Ignore browser storage issues; schedule generation flow should still continue.
+        }
         navigate(`/scheduling-draft?snapshotId=${result.snapshot_id}&jobId=${result.job_id}`);
       }
     } finally {
@@ -680,6 +919,7 @@ export function SchedulingManagerPage() {
 
     const selectedDateSet = new Set(globalExamDates);
     const payload = {
+      job_name: examJobName.trim(),
       exam_dates: [...globalExamDates].sort(),
       selected_room_names: [...globalExamSelectedRooms].sort(),
       program_plans: examProgramPlans
@@ -704,29 +944,54 @@ export function SchedulingManagerPage() {
             .filter((yearPlan) => yearPlan.courses.length > 0),
         }))
         .filter((program) => program.years.length > 0),
-      constraints: {
-        no_same_program_year_day_timeslot:
-          examConstraints.noTwoSubjectsSameDay && examConstraints.noTwoSubjectsSameTimeslot,
-        no_student_overlap: examConstraints.noStudentSameDayTimeslot,
-        room_capacity_check: true,
-        prefer_day_timeslot: examConstraints.prioritizePreferredDayAndTimeslot,
-        allow_flexible_fallback: examConstraints.fallbackFlexibleWhenUnavailable,
-      },
     };
 
     try {
       setIsGeneratingExamSchedule(true);
+      setExamGenerationStatus('running');
       setExamGenerationError(null);
-      await generateExamSchedule(payload);
+      const initialJob = await generateExamSchedule(payload);
+      let latestJob = initialJob;
+      setExamGenerationStatus(initialJob.status);
+
+      const isTerminalStatus = (status: string) => {
+        const normalized = status.toLowerCase();
+        return normalized === 'succeeded' || normalized === 'failed';
+      };
+
+      if (!isTerminalStatus(initialJob.status)) {
+        for (let attempt = 0; attempt < 180; attempt += 1) {
+          await new Promise((resolve) => window.setTimeout(resolve, 1000));
+          latestJob = await getExamScheduleJob(initialJob.job_id);
+          setExamGenerationStatus(latestJob.status);
+          if (isTerminalStatus(latestJob.status)) {
+            break;
+          }
+        }
+      }
+
+      if (latestJob.status.toLowerCase() === 'failed') {
+        setExamGenerationError(latestJob.error_message ?? 'Exam generation failed on backend. Please try again.');
+        return;
+      }
+
+      if (latestJob.snapshot_id) {
+        navigate(`/exam-scheduling-draft?snapshotId=${latestJob.snapshot_id}&jobId=${latestJob.job_id}`);
+      } else {
+        setExamGenerationError('Exam generation finished without a draft snapshot. Please try again.');
+      }
     } catch (error) {
-      const statusCode = (error as AxiosError)?.response?.status;
+      const axiosError = error as AxiosError<{ detail?: string }>;
+      const statusCode = axiosError.response?.status;
+      const detail = axiosError.response?.data?.detail;
       if (statusCode === 404) {
         setExamGenerationError('Exam scheduling endpoint is not available yet. Frontend payload wiring is ready.');
       } else {
-        setExamGenerationError('Failed to generate exam schedule. Please try again.');
+        setExamGenerationError(detail ?? 'Failed to generate exam schedule. Please try again.');
       }
     } finally {
       setIsGeneratingExamSchedule(false);
+      setExamGenerationStatus(null);
     }
   };
 
@@ -760,8 +1025,6 @@ export function SchedulingManagerPage() {
           toggleRoom={toggleRoom}
           roomCapacityMap={roomCapacityMap}
           removeRoom={removeRoom}
-          constraints={constraints}
-          toggleConstraint={toggleConstraint}
           isGenerating={isGeneratingClassSchedule || isCheckingExistingDraft}
           onGenerate={handleGenerateClassSchedule}
         />
@@ -769,6 +1032,8 @@ export function SchedulingManagerPage() {
 
       {activeTab === 'Schedule Exam' && (
         <ScheduleExamTab
+          examJobName={examJobName}
+          setExamJobName={setExamJobName}
           isExamPeriodExpanded={isExamPeriodExpanded}
           setIsExamPeriodExpanded={setIsExamPeriodExpanded}
           globalExamDates={globalExamDates}
@@ -806,12 +1071,12 @@ export function SchedulingManagerPage() {
           updateExamSubjectTimeSlots={updateExamSubjectTimeSlots}
           removeExamSubject={removeExamSubject}
           examTimeSlotOptions={examTimeSlotOptions}
-          examConstraints={examConstraints}
-          toggleExamConstraint={toggleExamConstraint}
           canGenerateExamSchedule={canGenerateExamSchedule}
           totalExamSubjects={totalExamSubjects}
           examValidationMessage={examValidationMessage}
           isGeneratingExamSchedule={isGeneratingExamSchedule}
+          examGenerationProgressPercent={examGenerationProgressPercent}
+          examGenerationStatusLabel={examGenerationStatusLabel}
           onGenerateExamSchedule={handleGenerateExamSchedule}
         />
       )}

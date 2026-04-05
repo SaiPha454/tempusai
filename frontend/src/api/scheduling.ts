@@ -6,7 +6,7 @@ const examBasePath = '/scheduling/exam';
 export type ClassScheduleGeneratePayload = {
   program_value: string;
   selected_room_names: string[];
-  constraints: Record<string, boolean>;
+  constraints?: Record<string, boolean>;
   preferred_timeslot_by_course_id: Record<string, string[]>;
 };
 
@@ -36,6 +36,7 @@ export type ScheduleConflictDto = {
 
 export type ScheduleClassEntryDto = {
   id: string;
+  program_year_course_id: string | null;
   course_id: string;
   course_code: string;
   course_name: string;
@@ -47,12 +48,20 @@ export type ScheduleClassEntryDto = {
   day: string | null;
   room_id: string | null;
   room_name: string | null;
+  required_capacity: number | null;
   manually_adjusted: boolean;
   conflicts: ScheduleConflictDto[];
 };
 
 export type ConfirmedOccupancyDto = {
   room_id: string;
+  timeslot_id: string;
+  course_code: string;
+  course_name: string;
+};
+
+export type ConfirmedProfessorOccupancyDto = {
+  professor_id: string;
   timeslot_id: string;
   course_code: string;
   course_name: string;
@@ -68,6 +77,7 @@ export type ClassScheduleDraftDto = {
   selected_room_names: string[];
   entries: ScheduleClassEntryDto[];
   confirmed_occupancies: ConfirmedOccupancyDto[];
+  confirmed_professor_occupancies: ConfirmedProfessorOccupancyDto[];
   conflict_count: number;
   created_at: string;
   updated_at: string;
@@ -87,6 +97,7 @@ export type ExamConstraintPayload = {
   room_capacity_check: boolean;
   prefer_day_timeslot: boolean;
   allow_flexible_fallback: boolean;
+  minimize_same_program_year_same_day: boolean;
 };
 
 export type ExamCoursePreferencePayload = {
@@ -110,10 +121,11 @@ export type ExamProgramPlanPayload = {
 };
 
 export type ExamScheduleGeneratePayload = {
+  job_name: string;
   exam_dates: string[];
   selected_room_names: string[];
   program_plans: ExamProgramPlanPayload[];
-  constraints: ExamConstraintPayload;
+  constraints?: ExamConstraintPayload;
 };
 
 export type ExamScheduleJobDto = {
@@ -121,6 +133,80 @@ export type ExamScheduleJobDto = {
   snapshot_id: string | null;
   status: string;
   error_message?: string | null;
+};
+
+export type ExamScheduleSummaryDto = {
+  id: string;
+  job_name: string | null;
+  status: string;
+  program_values: string[];
+  exam_dates: string[];
+  entry_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ExamDraftScheduleSummaryDto = {
+  id: string;
+  job_name: string | null;
+  status: string;
+  program_values: string[];
+  exam_dates: string[];
+  entry_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ConfirmedExamOccupancyDto = {
+  room_id: string;
+  exam_date: string;
+  timeslot_code: string;
+  course_code: string;
+  course_name: string;
+};
+
+export type ScheduleExamEntryDto = {
+  id: string;
+  program_id: string;
+  program_value: string;
+  program_label: string;
+  program_year_course_id: string | null;
+  course_id: string;
+  course_code: string;
+  course_name: string;
+  year: number;
+  semester: string | null;
+  exam_type: string | null;
+  exam_date: string | null;
+  timeslot_code: string | null;
+  room_id: string | null;
+  room_name: string | null;
+  manually_adjusted: boolean;
+  conflicts: ScheduleConflictDto[];
+};
+
+export type ExamScheduleDraftDto = {
+  id: string;
+  job_name: string | null;
+  status: string;
+  constraints: Record<string, boolean>;
+  selected_room_names: string[];
+  exam_dates: string[];
+  program_values: string[];
+  entries: ScheduleExamEntryDto[];
+  confirmed_occupancies: ConfirmedExamOccupancyDto[];
+  conflict_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SaveExamScheduleDraftPayload = {
+  entries: Array<{
+    id: string;
+    exam_date: string | null;
+    timeslot_code: string | null;
+    room_id: string | null;
+  }>;
 };
 
 export async function generateClassSchedule(payload: ClassScheduleGeneratePayload): Promise<ClassScheduleJobDto> {
@@ -141,6 +227,33 @@ export async function generateExamSchedule(payload: ExamScheduleGeneratePayload)
 export async function getExamScheduleJob(jobId: string): Promise<ExamScheduleJobDto> {
   const response = await apiClient.get<ExamScheduleJobDto>(`${examBasePath}/jobs/${jobId}`);
   return response.data;
+}
+
+export async function listConfirmedExamScheduleSummary(): Promise<ExamScheduleSummaryDto[]> {
+  const response = await apiClient.get<ExamScheduleSummaryDto[]>(`${examBasePath}/schedules/summary`);
+  return response.data;
+}
+
+export async function listExamDraftScheduleSummary(): Promise<ExamDraftScheduleSummaryDto[]> {
+  const response = await apiClient.get<ExamDraftScheduleSummaryDto[]>(`${examBasePath}/drafts/summary`);
+  return response.data;
+}
+
+export async function getExamScheduleDraft(snapshotId: string): Promise<ExamScheduleDraftDto> {
+  const response = await apiClient.get<ExamScheduleDraftDto>(`${examBasePath}/drafts/${snapshotId}`);
+  return response.data;
+}
+
+export async function saveExamScheduleDraft(
+  snapshotId: string,
+  payload: SaveExamScheduleDraftPayload,
+): Promise<ExamScheduleDraftDto> {
+  const response = await apiClient.put<ExamScheduleDraftDto>(`${examBasePath}/drafts/${snapshotId}`, payload);
+  return response.data;
+}
+
+export async function deleteExamScheduleDraft(snapshotId: string): Promise<void> {
+  await apiClient.delete(`${examBasePath}/drafts/${snapshotId}`);
 }
 
 export async function listClassDraftSummary(): Promise<ProgramDraftSummaryDto[]> {

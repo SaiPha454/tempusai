@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/tempusai"
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    run_migrations_on_startup: bool = True
+    run_seed_on_empty_resources_startup: bool = True
 
     @property
     def cors_origins_list(self) -> list[str]:

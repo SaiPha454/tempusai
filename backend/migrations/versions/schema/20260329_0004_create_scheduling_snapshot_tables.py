@@ -1,7 +1,7 @@
 """create scheduling snapshot tables
 
 Revision ID: 20260329_0004
-Revises: 20260329_0003
+Revises: 20260405_0108
 Create Date: 2026-03-29 09:00:00
 """
 
@@ -13,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "20260329_0004"
-down_revision: str | None = "20260329_0003"
+down_revision: str | None = "20260405_0108"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 

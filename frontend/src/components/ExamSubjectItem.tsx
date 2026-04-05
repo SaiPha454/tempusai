@@ -54,7 +54,10 @@ export function ExamSubjectItem({
         <div className="space-y-2">
           <p className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-700">
             <CalendarDays size={14} className="text-slate-500" />
-            Preferred days
+            Preferred days (optional)
+          </p>
+          <p className="text-[11px] text-slate-500">
+            If empty, default preference comes from this course&apos;s confirmed class weekday within exam period.
           </p>
           <PillMultiSelector
             options={availableDateOptions}

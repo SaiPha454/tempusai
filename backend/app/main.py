@@ -1,8 +1,11 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router as api_router
 from app.core.config import settings
+from app.core.migrations import run_startup_migrations
 
 openapi_tags = [
     {"name": "system", "description": "System health and service status."},
@@ -42,7 +45,17 @@ openapi_tags = [
         "name": "scheduling-class",
         "description": "Class schedule generation, draft retrieval, and draft editing operations.",
     },
+    {
+        "name": "scheduling-exam",
+        "description": "Exam schedule generation, draft retrieval, adjustment, and confirmation operations.",
+    },
 ]
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    run_startup_migrations()
+    yield
 
 
 def create_app() -> FastAPI:
@@ -51,6 +64,7 @@ def create_app() -> FastAPI:
         description="Resource Management API for programs, courses, rooms, timeslots, professors, students, and planning data.",
         version="1.0.0",
         openapi_tags=openapi_tags,
+        lifespan=lifespan,
     )
 
     app.add_middleware(

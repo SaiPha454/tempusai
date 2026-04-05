@@ -1,1 +1,7 @@
 Single-database configuration for Alembic migrations.
+
+Migration revisions are split by purpose:
+- `migrations/versions/schema`: schema/layout changes only
+- `migrations/versions/seed`: data seed revisions for test/demo data
+
+Seed revisions are table-focused and should be authored as one migration file per seeded table.

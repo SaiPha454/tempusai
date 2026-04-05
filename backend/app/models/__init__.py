@@ -1,4 +1,4 @@
-from app.models.resource import (
+from app.models.schema import (
     Course,
     Professor,
     ProfessorAvailability,
@@ -7,6 +7,8 @@ from app.models.resource import (
     Room,
     ScheduleClassEntry,
     ScheduleClassSnapshot,
+    ScheduleExamEntry,
+    ScheduleExamSnapshot,
     ScheduleGenerationJob,
     SpecialEnrollment,
     SpecialEnrollmentCourse,
@@ -27,5 +29,7 @@ __all__ = [
     "ProgramYearCourse",
     "ScheduleClassSnapshot",
     "ScheduleClassEntry",
+    "ScheduleExamSnapshot",
+    "ScheduleExamEntry",
     "ScheduleGenerationJob",
 ]

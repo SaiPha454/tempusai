@@ -23,6 +23,7 @@ const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Sat
 
 const bucketOrder: MatrixBucket[] = ['morning', 'afternoon', 'evening'];
 const draftViewTabs: DraftViewTab[] = ['Time & Days', 'Room-Centric'];
+const CLASS_PREFS_STORAGE_PREFIX = 'classPreferredSlotsBySnapshot:';
 
 const conflictMessageByCode: Record<string, string> = {
   room_overlap: 'Room has another class at this timeslot.',
@@ -172,6 +173,34 @@ const detectBucketFromTimeLabel = (label: string | null | undefined): MatrixBuck
   return null;
 };
 
+const readPreferredTimeslotsByKey = (snapshotId: string | null): Record<string, string[]> => {
+  if (!snapshotId) {
+    return {};
+  }
+
+  try {
+    const raw = sessionStorage.getItem(`${CLASS_PREFS_STORAGE_PREFIX}${snapshotId}`);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const normalized: Record<string, string[]> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!Array.isArray(value)) {
+        continue;
+      }
+      const slotIds = value.filter((item): item is string => typeof item === 'string');
+      if (slotIds.length > 0) {
+        normalized[key] = slotIds;
+      }
+    }
+    return normalized;
+  } catch {
+    return {};
+  }
+};
+
 export function ScheduleDraftPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -191,6 +220,11 @@ export function ScheduleDraftPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeConflictPopover, setActiveConflictPopover] = useState<{ entryId: string; code: string } | null>(null);
   const [hoveredCellKey, setHoveredCellKey] = useState<string | null>(null);
+
+  const preferredTimeslotsByKey = useMemo(
+    () => readPreferredTimeslotsByKey(snapshotId),
+    [snapshotId],
+  );
 
   useEffect(() => {
     let isCancelled = false;
@@ -362,6 +396,20 @@ export function ScheduleDraftPage() {
     return map;
   }, [draft?.confirmed_occupancies]);
 
+  const confirmedOccupancyByProfessorTimeslot = useMemo(() => {
+    const map = new Map<string, { courseCode: string; courseName: string }>();
+    for (const occupancy of draft?.confirmed_professor_occupancies ?? []) {
+      const key = `${occupancy.professor_id}-${occupancy.timeslot_id}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          courseCode: occupancy.course_code,
+          courseName: occupancy.course_name,
+        });
+      }
+    }
+    return map;
+  }, [draft?.confirmed_professor_occupancies]);
+
   const conflictedEntriesCount = useMemo(
     () => localEntries.filter((entry) => entry.conflicts.length > 0).length,
     [localEntries],
@@ -391,6 +439,14 @@ export function ScheduleDraftPage() {
           entry.conflicts.push({ code: 'room_overlap', message: conflictMessageByCode.room_overlap });
         }
 
+        if (draft?.constraints.roomCapacityCheck) {
+          const roomCapacity = roomById.get(entry.room_id)?.capacity ?? 0;
+          const requiredCapacity = entry.required_capacity ?? 0;
+          if (requiredCapacity > roomCapacity) {
+            entry.conflicts.push({ code: 'room_capacity_exceeded', message: conflictMessageByCode.room_capacity_exceeded });
+          }
+        }
+
         const key = `${entry.room_id}-${entry.timeslot_id}`;
         const items = byRoomSlot.get(key) ?? [];
         items.push(entry);
@@ -398,6 +454,11 @@ export function ScheduleDraftPage() {
       }
 
       if (draft?.constraints.professorNoOverlap && entry.timeslot_id && entry.professor_id) {
+        const occupiedKey = `${entry.professor_id}-${entry.timeslot_id}`;
+        if (confirmedOccupancyByProfessorTimeslot.has(occupiedKey)) {
+          entry.conflicts.push({ code: 'professor_overlap', message: conflictMessageByCode.professor_overlap });
+        }
+
         const key = `${entry.professor_id}-${entry.timeslot_id}`;
         const items = byProfessorSlot.get(key) ?? [];
         items.push(entry);
@@ -512,6 +573,10 @@ export function ScheduleDraftPage() {
       if (matched) {
         return `Conflicts with ${matched.course_code} (${matched.course_name}) for Professor ${entry.professor_name ?? 'N/A'}.`;
       }
+      const confirmedMatch = confirmedOccupancyByProfessorTimeslot.get(`${entry.professor_id}-${entry.timeslot_id}`);
+      if (confirmedMatch) {
+        return `Conflicts with confirmed schedule ${confirmedMatch.courseCode} (${confirmedMatch.courseName}) for Professor ${entry.professor_name ?? 'N/A'}.`;
+      }
       return conflictMessageByCode.professor_overlap;
     }
 
@@ -523,6 +588,12 @@ export function ScheduleDraftPage() {
         return `Conflicts with ${matched.course_code} (${matched.course_name}) in Year ${entry.year}.`;
       }
       return conflictMessageByCode.year_overlap;
+    }
+
+    if (code === 'room_capacity_exceeded' && entry.room_id) {
+      const roomCapacity = roomById.get(entry.room_id)?.capacity ?? 0;
+      const requiredCapacity = entry.required_capacity ?? 0;
+      return `Room capacity ${roomCapacity} is below required enrollment ${requiredCapacity}.`;
     }
 
     return 'Conflict detected.';
@@ -563,8 +634,21 @@ export function ScheduleDraftPage() {
     }
 
     const draggingEntry = localEntries.find((entry) => entry.id === draggingEntryId);
-    const defaultRoomId = selectedRooms[0]?.id ?? null;
-    updateEntryPlacement(draggingEntryId, targetTimeslotId, draggingEntry?.room_id ?? defaultRoomId);
+    if (!draggingEntry) {
+      setDraggingEntryId(null);
+      setHoveredCellKey(null);
+      return;
+    }
+
+    const fallbackRoomId = findValidRoomIdForTimeCell(draggingEntry, day, bucket);
+    if (!fallbackRoomId) {
+      setErrorMessage('No available room in this cell due to overlap constraints.');
+      setDraggingEntryId(null);
+      setHoveredCellKey(null);
+      return;
+    }
+
+    updateEntryPlacement(draggingEntryId, targetTimeslotId, fallbackRoomId);
     setDraggingEntryId(null);
     setHoveredCellKey(null);
     setErrorMessage(null);
@@ -608,6 +692,21 @@ export function ScheduleDraftPage() {
       return false;
     }
 
+    if (draft?.constraints.roomCapacityCheck) {
+      const roomCapacity = roomById.get(roomId)?.capacity ?? 0;
+      const requiredCapacity = entry.required_capacity ?? 0;
+      if (requiredCapacity > roomCapacity) {
+        return false;
+      }
+    }
+
+    if (draft?.constraints.professorNoOverlap && entry.professor_id) {
+      const professorKey = `${entry.professor_id}-${targetTimeslotId}`;
+      if (confirmedOccupancyByProfessorTimeslot.has(professorKey)) {
+        return false;
+      }
+    }
+
     for (const candidate of localEntries) {
       if (candidate.id === entry.id || candidate.timeslot_id !== targetTimeslotId) {
         continue;
@@ -638,7 +737,17 @@ export function ScheduleDraftPage() {
       return false;
     }
 
-    return selectableRooms.some((room) => canPlaceEntryInRoomCell(entry, day, bucket, room.id));
+    return Boolean(findValidRoomIdForTimeCell(entry, day, bucket));
+  };
+
+  const findValidRoomIdForTimeCell = (entry: LocalEntry, day: string, bucket: MatrixBucket): string | null => {
+    const preferredRoomIds = [entry.room_id, ...selectableRooms.map((room) => room.id)].filter(
+      (roomId): roomId is string => Boolean(roomId),
+    );
+
+    const uniqueRoomIds = Array.from(new Set(preferredRoomIds));
+    const validRoomId = uniqueRoomIds.find((roomId) => canPlaceEntryInRoomCell(entry, day, bucket, roomId));
+    return validRoomId ?? null;
   };
 
   const handleSaveDraft = async () => {
@@ -728,6 +837,14 @@ export function ScheduleDraftPage() {
       badge: 'bg-slate-200 text-slate-700',
     };
 
+    const preferredSlotIds =
+      (entry.program_year_course_id ? preferredTimeslotsByKey[entry.program_year_course_id] : undefined) ??
+      preferredTimeslotsByKey[entry.course_id] ??
+      [];
+    const hasPreferences = preferredSlotIds.length > 0;
+    const isPreferredMatched = hasPreferences && Boolean(entry.timeslot_id && preferredSlotIds.includes(entry.timeslot_id));
+    const isPreferredPending = hasPreferences && !entry.timeslot_id;
+
     return (
       <div
         key={entry.id}
@@ -741,6 +858,23 @@ export function ScheduleDraftPage() {
       >
         <p className="text-xs font-semibold text-slate-900">{entry.course_code}</p>
         <p className="text-xs text-slate-700">{entry.course_name}</p>
+        {hasPreferences && (
+          <p
+            className={`mt-1 inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+              isPreferredMatched
+                ? 'bg-emerald-100 text-emerald-800'
+                : isPreferredPending
+                  ? 'bg-slate-100 text-slate-700'
+                  : 'bg-amber-100 text-amber-800'
+            }`}
+          >
+            {isPreferredMatched
+              ? 'Preferred matched'
+              : isPreferredPending
+                ? 'Preferred pending'
+                : 'Preferred not matched'}
+          </p>
+        )}
         {showYear && (
           <p className={`mt-1 inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold ${yearStyle.badge}`}>
             Year {entry.year}
@@ -1069,6 +1203,8 @@ export function ScheduleDraftPage() {
                             !isUnavailableCell &&
                             Boolean(draggingEntry) &&
                             canPlaceEntryInRoomCell(draggingEntry as LocalEntry, day, row.key, room.id);
+                          const isDroppableCell =
+                            !isUnavailableCell && (!draggingEntry || isValidPlacementTarget);
                           const cellKey = `${room.id}-${row.key}-${day}`;
                           const entriesInCell = localEntries.filter((entry) => {
                             if (!entry.timeslot_id || entry.room_id !== room.id) {
@@ -1085,7 +1221,7 @@ export function ScheduleDraftPage() {
                             <div
                               key={cellKey}
                               onDragOver={(event) => {
-                                if (isUnavailableCell) {
+                                if (!isDroppableCell) {
                                   return;
                                 }
                                 event.preventDefault();
@@ -1095,7 +1231,7 @@ export function ScheduleDraftPage() {
                                 setHoveredCellKey((current) => (current === cellKey ? null : current))
                               }
                               onDrop={() => {
-                                if (isUnavailableCell) {
+                                if (!isDroppableCell) {
                                   setHoveredCellKey(null);
                                   return;
                                 }

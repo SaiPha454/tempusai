@@ -32,6 +32,7 @@ export type ProgramYearCourse = {
   id: string;
   code: string;
   name: string;
+  professorId: string | null;
   professorName: string;
 };
 export type ProgramYearPlan = {
@@ -60,7 +61,10 @@ const ResourcesCatalogContext = createContext<ResourcesCatalogContextValue | und
 const createBaseYearPlans = (): ProgramYearPlan[] =>
   [1, 2, 3, 4].map((year) => ({ year, courses: [] }));
 
-const mapProgramYearRowsToPlans = (rows: ProgramYearRowDto[]): ProgramYearPlansByProgram => {
+const mapProgramYearRowsToPlans = (
+  rows: ProgramYearRowDto[],
+  professorIdByName: Map<string, string>,
+): ProgramYearPlansByProgram => {
   const grouped = rows.reduce<Record<string, ProgramYearPlan[]>>((acc, row) => {
     if (!acc[row.program_value]) {
       acc[row.program_value] = createBaseYearPlans();
@@ -68,11 +72,14 @@ const mapProgramYearRowsToPlans = (rows: ProgramYearRowDto[]): ProgramYearPlansB
 
     const yearPlan = acc[row.program_value].find((item) => item.year === row.year);
     if (yearPlan) {
+      const professorName = row.professor_name ?? '';
+      const professorId = professorName ? professorIdByName.get(professorName.trim()) ?? null : null;
       yearPlan.courses.push({
         id: row.id,
         code: row.course_code,
         name: row.course_name,
-        professorName: row.professor_name ?? '',
+        professorId,
+        professorName,
       });
     }
 
@@ -158,7 +165,12 @@ export function ResourcesCatalogProvider({ children }: { children: ReactNode }) 
       }
 
       if (planRowsResult.status === 'fulfilled') {
-        setProgramYearPlans(mapProgramYearRowsToPlans(planRowsResult.value));
+        const professorIdByName = new Map(
+          professorsResult.status === 'fulfilled'
+            ? professorsResult.value.map((item) => [item.name.trim(), item.id] as const)
+            : [],
+        );
+        setProgramYearPlans(mapProgramYearRowsToPlans(planRowsResult.value, professorIdByName));
       } else {
         console.error('Failed to load program-year plans from backend', planRowsResult.reason);
       }

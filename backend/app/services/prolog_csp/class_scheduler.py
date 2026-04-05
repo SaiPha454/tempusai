@@ -18,7 +18,7 @@ class PrologCourseRow:
 
 
 class PrologClassScheduler:
-    def __init__(self, timeout_seconds: int = 45) -> None:
+    def __init__(self, timeout_seconds: int = 75) -> None:
         self.timeout_seconds = timeout_seconds
         self._swipl = shutil.which("swipl")
         self._solver_path = Path(__file__).with_name("class_scheduler.pl")
@@ -65,15 +65,21 @@ class PrologClassScheduler:
                 "-s",
                 str(self._solver_path),
                 "-g",
-                "solve_and_print,halt.",
+                f"solve_and_print({self.timeout_seconds}),halt.",
             ]
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                check=False,
-            )
+            try:
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=max(self.timeout_seconds + 20, 25),
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as error:
+                partial_output = error.stdout or ""
+                if isinstance(partial_output, bytes):
+                    partial_output = partial_output.decode("utf-8", errors="ignore")
+                return self._parse_output(partial_output)
 
             if completed.returncode != 0:
                 stderr = completed.stderr.strip()
@@ -106,6 +112,9 @@ class PrologClassScheduler:
 
         for timeslot_id in timeslot_ids:
             lines.append(f"time_slot({self._atom(str(timeslot_id))}).")
+
+        for slot_rank, timeslot_id in enumerate(timeslot_ids):
+            lines.append(f"slot_rank({self._atom(str(timeslot_id))}, {slot_rank}).")
 
         for row in course_rows:
             professor_key = self._professor_key(row.course_id, row.professor_id)

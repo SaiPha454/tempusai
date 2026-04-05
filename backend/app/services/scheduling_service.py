@@ -57,7 +57,8 @@ class SchedulingService:
             raise bad_request("Program does not exist")
 
         existing_snapshot = self._get_latest_program_snapshot(program.id)
-        if existing_snapshot is not None:
+        has_user_inputs = bool(payload.selected_room_names) or bool(payload.preferred_timeslot_by_course_id)
+        if existing_snapshot is not None and not has_user_inputs:
             reuse_job = ScheduleGenerationJob(snapshot_id=existing_snapshot.id, status="succeeded", job_type="class")
             self.db.add(reuse_job)
             self.db.commit()
@@ -97,12 +98,23 @@ class SchedulingService:
         )
         occupied_room_slots, occupied_professor_slots = self._get_confirmed_resource_occupancy()
 
+        valid_course_ids = {row.course_id for row in plan_rows}
+        course_id_by_plan_row_id = {row.id: row.course_id for row in plan_rows}
+
         preferred_timeslots_by_course_id: dict[UUID, list[UUID]] = {}
-        for raw_course_id, raw_slot_ids in payload.preferred_timeslot_by_course_id.items():
+        for raw_preference_key, raw_slot_ids in payload.preferred_timeslot_by_course_id.items():
             try:
-                course_id = UUID(raw_course_id)
+                parsed_key_id = UUID(raw_preference_key)
             except (TypeError, ValueError):
                 continue
+
+            # Accept both direct course IDs and program-year-plan row IDs from clients.
+            if parsed_key_id in valid_course_ids:
+                course_id = parsed_key_id
+            else:
+                course_id = course_id_by_plan_row_id.get(parsed_key_id)
+                if course_id is None:
+                    continue
 
             slot_ids: list[UUID] = []
             for raw_slot_id in raw_slot_ids:
@@ -112,7 +124,8 @@ class SchedulingService:
                     continue
 
             if slot_ids:
-                preferred_timeslots_by_course_id[course_id] = slot_ids
+                existing_slot_ids = preferred_timeslots_by_course_id.get(course_id, [])
+                preferred_timeslots_by_course_id[course_id] = list(dict.fromkeys(existing_slot_ids + slot_ids))
 
         try:
             prolog_solver = PrologClassScheduler()
@@ -383,6 +396,26 @@ class SchedulingService:
         conflict_count = 0
         serialized: list[ScheduleClassEntryRead] = []
 
+        # Resolve ProgramYearCourse row IDs so frontend can map per-row preferences.
+        course_year_pairs = {(entry.course_id, entry.year) for entry in snapshot.entries}
+        plan_rows = list(
+            self.db.scalars(
+                select(ProgramYearCourse)
+                .where(ProgramYearCourse.program_id == snapshot.program_id)
+                .where(ProgramYearCourse.course_id.in_([course_id for course_id, _ in course_year_pairs]))
+                .where(ProgramYearCourse.year.in_([year for _, year in course_year_pairs]))
+            )
+        )
+        plan_row_id_by_course_year = {
+            (row.course_id, row.year): row.id
+            for row in plan_rows
+        }
+
+        course_demand_by_pair = self._build_course_demand_map(
+            program_id=snapshot.program_id,
+            course_year_pairs=course_year_pairs,
+        )
+
         for entry in sorted(snapshot.entries, key=lambda item: (item.year, item.course.code)):
             codes = conflict_codes_by_entry_id.get(entry.id, [])
             conflicts = [self._build_conflict(code) for code in codes]
@@ -392,6 +425,7 @@ class SchedulingService:
             serialized.append(
                 ScheduleClassEntryRead(
                     id=entry.id,
+                    program_year_course_id=plan_row_id_by_course_year.get((entry.course_id, entry.year)),
                     course_id=entry.course_id,
                     course_code=entry.course.code,
                     course_name=entry.course.name,
@@ -403,6 +437,7 @@ class SchedulingService:
                     day=entry.timeslot.day if entry.timeslot else None,
                     room_id=entry.room_id,
                     room_name=entry.room.name if entry.room else None,
+                    required_capacity=course_demand_by_pair.get((entry.course_id, entry.year), 0),
                     manually_adjusted=entry.manually_adjusted,
                     conflicts=conflicts,
                 )

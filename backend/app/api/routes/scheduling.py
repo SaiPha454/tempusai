@@ -8,10 +8,17 @@ from app.schemas.scheduling import (
     ClassScheduleDraftRead,
     ClassScheduleGenerateRequest,
     ClassScheduleJobRead,
+    ExamDraftScheduleSummaryRead,
+    ExamScheduleDraftRead,
+    ExamScheduleGenerateRequest,
+    ExamScheduleJobRead,
+    ExamScheduleSummaryRead,
     ProgramConfirmedScheduleSummaryRead,
     ProgramDraftSummaryRead,
+    SaveExamScheduleDraftRequest,
     SaveClassScheduleDraftRequest,
 )
+from app.services.exam_scheduling_service import ExamSchedulingService
 from app.services.scheduling_service import SchedulingService
 
 router = APIRouter(tags=["scheduling-class"])
@@ -111,4 +118,83 @@ def save_class_schedule_draft(
 )
 def delete_class_schedule_draft(snapshot_id: UUID, db: Session = Depends(db_dependency)) -> Response:
     SchedulingService(db).delete_class_draft(snapshot_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/exam/jobs",
+    response_model=ExamScheduleJobRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Generate exam scheduling draft job",
+    tags=["scheduling-exam"],
+)
+def generate_exam_schedule_job(
+    payload: ExamScheduleGenerateRequest,
+    db: Session = Depends(db_dependency),
+) -> ExamScheduleJobRead:
+    return ExamSchedulingService(db).create_exam_generation_job(payload)
+
+
+@router.get(
+    "/exam/jobs/{job_id}",
+    response_model=ExamScheduleJobRead,
+    summary="Get exam scheduling job status",
+    tags=["scheduling-exam"],
+)
+def get_exam_schedule_job(job_id: UUID, db: Session = Depends(db_dependency)) -> ExamScheduleJobRead:
+    return ExamSchedulingService(db).get_job(job_id)
+
+
+@router.get(
+    "/exam/schedules/summary",
+    response_model=list[ExamScheduleSummaryRead],
+    summary="List confirmed exam schedules",
+    tags=["scheduling-exam"],
+)
+def list_confirmed_exam_schedules(db: Session = Depends(db_dependency)) -> list[ExamScheduleSummaryRead]:
+    return ExamSchedulingService(db).list_confirmed_exam_summaries()
+
+
+@router.get(
+    "/exam/drafts/summary",
+    response_model=list[ExamDraftScheduleSummaryRead],
+    summary="List exam draft schedules",
+    tags=["scheduling-exam"],
+)
+def list_exam_drafts(db: Session = Depends(db_dependency)) -> list[ExamDraftScheduleSummaryRead]:
+    return ExamSchedulingService(db).list_draft_exam_summaries()
+
+
+@router.get(
+    "/exam/drafts/{snapshot_id}",
+    response_model=ExamScheduleDraftRead,
+    summary="Get exam scheduling draft",
+    tags=["scheduling-exam"],
+)
+def get_exam_schedule_draft(snapshot_id: UUID, db: Session = Depends(db_dependency)) -> ExamScheduleDraftRead:
+    return ExamSchedulingService(db).get_exam_draft(snapshot_id)
+
+
+@router.put(
+    "/exam/drafts/{snapshot_id}",
+    response_model=ExamScheduleDraftRead,
+    summary="Save exam scheduling draft",
+    tags=["scheduling-exam"],
+)
+def save_exam_schedule_draft(
+    snapshot_id: UUID,
+    payload: SaveExamScheduleDraftRequest,
+    db: Session = Depends(db_dependency),
+) -> ExamScheduleDraftRead:
+    return ExamSchedulingService(db).save_exam_draft(snapshot_id, payload)
+
+
+@router.delete(
+    "/exam/drafts/{snapshot_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete exam scheduling draft",
+    tags=["scheduling-exam"],
+)
+def delete_exam_schedule_draft(snapshot_id: UUID, db: Session = Depends(db_dependency)) -> Response:
+    ExamSchedulingService(db).delete_exam_draft(snapshot_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

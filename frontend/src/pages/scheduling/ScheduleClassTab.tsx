@@ -1,13 +1,14 @@
 import { CalendarDays } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Card } from '../../components/Card';
 import { SelectField } from '../../components/SelectField';
 import { MultiSelectDropdown } from '../../components/MultiSelectDropdown';
 import { RoomSelector } from '../../components/RoomSelector';
 import { SelectedChipSummary } from '../../components/SelectedChipSummary';
-import { ToggleSwitch } from '../../components/ToggleSwitch';
+import { Tabs } from '../../components/Tabs';
 
 const ESTIMATED_GENERATION_SECONDS = 45;
+const curriculumTabs = ['Program Curriculum', 'Professor Availability'] as const;
 
 type SelectOption = {
   value: string;
@@ -18,20 +19,13 @@ type ProgramCourse = {
   id: string;
   code: string;
   name: string;
+  professorId: string | null;
   professorName: string;
 };
 
 type ProgramYearPlan = {
   year: string;
   courses: ProgramCourse[];
-};
-
-type ConstraintState = {
-  prioritizeProfessorPreferences: boolean;
-  professorNoOverlap: boolean;
-  roomCapacityCheck: boolean;
-  flexibleSlotFallback: boolean;
-  studentGroupsNoOverlap: boolean;
 };
 
 type ScheduleClassTabProps = {
@@ -41,7 +35,7 @@ type ScheduleClassTabProps = {
   studyProgramOptionColorByValue?: Record<string, string>;
   selectedProgramCourseCount: number;
   selectedProgramYearPlans: ProgramYearPlan[];
-  getPreferredTimeslotOptions: (professorName: string) => Array<{ value: string; label: string }>;
+  getPreferredTimeslotOptions: (professorId: string) => Array<{ value: string; label: string }>;
   preferredTimeslotByCourseId: Record<string, string[]>;
   setPreferredTimeslotByCourseId: React.Dispatch<React.SetStateAction<Record<string, string[]>>>;
   roomSearch: string;
@@ -51,15 +45,6 @@ type ScheduleClassTabProps = {
   toggleRoom: (room: string) => void;
   roomCapacityMap: Record<string, number>;
   removeRoom: (room: string) => void;
-  constraints: ConstraintState;
-  toggleConstraint: (
-    key:
-      | 'prioritizeProfessorPreferences'
-      | 'professorNoOverlap'
-      | 'roomCapacityCheck'
-      | 'flexibleSlotFallback'
-      | 'studentGroupsNoOverlap',
-  ) => void;
   isGenerating: boolean;
   onGenerate: () => void;
 };
@@ -81,12 +66,11 @@ export function ScheduleClassTab({
   toggleRoom,
   roomCapacityMap,
   removeRoom,
-  constraints,
-  toggleConstraint,
   isGenerating,
   onGenerate,
 }: ScheduleClassTabProps) {
   const [remainingSeconds, setRemainingSeconds] = useState(ESTIMATED_GENERATION_SECONDS);
+  const [activeCurriculumTab, setActiveCurriculumTab] = useState<(typeof curriculumTabs)[number]>('Program Curriculum');
 
   useEffect(() => {
     if (!isGenerating) {
@@ -105,6 +89,92 @@ export function ScheduleClassTab({
 
   const progressWidth = `${Math.round((remainingSeconds / ESTIMATED_GENERATION_SECONDS) * 100)}%`;
 
+  const professorPlans = useMemo(() => {
+    const grouped = new Map<
+      string,
+      {
+        professorId: string;
+        professorName: string;
+        courses: Array<{ id: string; year: string; code: string; name: string }>;
+        slotOptions: Array<{ value: string; label: string }>;
+      }
+    >();
+
+    for (const yearPlan of selectedProgramYearPlans) {
+      for (const course of yearPlan.courses) {
+        const professorId = course.professorId?.trim();
+        const professorName = course.professorName?.trim();
+        if (!professorName) {
+          continue;
+        }
+
+        if (!professorId) {
+          continue;
+        }
+
+        if (!grouped.has(professorId)) {
+          const slotOptions = getPreferredTimeslotOptions(professorId);
+
+          grouped.set(professorId, {
+            professorId,
+            professorName,
+            courses: [],
+            slotOptions,
+          });
+        }
+
+        grouped.get(professorId)?.courses.push({
+          id: course.id,
+          year: yearPlan.year,
+          code: course.code,
+          name: course.name,
+        });
+      }
+    }
+
+    return [...grouped.values()].sort((left, right) => left.professorName.localeCompare(right.professorName));
+  }, [getPreferredTimeslotOptions, selectedProgramYearPlans]);
+
+  const resolveSelectedTimeslotsForProfessor = (professorPlan: (typeof professorPlans)[number]) => {
+    if (professorPlan.courses.length === 0) {
+      return [] as string[];
+    }
+
+    const courseSlotSets = professorPlan.courses.map(
+      (course) => new Set(preferredTimeslotByCourseId[course.id] ?? []),
+    );
+
+    const [firstSet, ...otherSets] = courseSlotSets;
+    if (!firstSet) {
+      return [];
+    }
+
+    return professorPlan.slotOptions
+      .filter((option) => firstSet.has(option.value) && otherSets.every((slotSet) => slotSet.has(option.value)))
+      .map((option) => option.value);
+  };
+
+  const handleProfessorPreferredTimeslotsChange = (
+    professorPlan: (typeof professorPlans)[number],
+    selectedTimeslotIds: string[],
+  ) => {
+    const dedupedTimeslotIds = [...new Set(selectedTimeslotIds)];
+
+    setPreferredTimeslotByCourseId((prev) => {
+      const next = { ...prev };
+
+      for (const course of professorPlan.courses) {
+        if (dedupedTimeslotIds.length === 0) {
+          delete next[course.id];
+        } else {
+          next[course.id] = dedupedTimeslotIds;
+        }
+      }
+
+      return next;
+    });
+  };
+
   return (
     <div className="mt-6 space-y-6 pb-8">
       <Card title="Study Program">
@@ -118,12 +188,22 @@ export function ScheduleClassTab({
         </div>
       </Card>
 
-      <Card title="Program curriculum" icon={CalendarDays}>
+      <Card
+        title="Program curriculum"
+        icon={CalendarDays}
+        headerRight={
+          <Tabs
+            tabs={[...curriculumTabs]}
+            activeTab={activeCurriculumTab}
+            onChange={(tab) => setActiveCurriculumTab(tab as (typeof curriculumTabs)[number])}
+          />
+        }
+      >
         {!selectedStudyProgram ? (
           <p className="text-sm text-slate-500">Please select a study program to view its Year 1-4 courses.</p>
         ) : selectedProgramCourseCount === 0 ? (
           <p className="text-sm text-slate-500">No courses assigned yet. Configure courses in Program Detail first.</p>
-        ) : (
+        ) : activeCurriculumTab === 'Program Curriculum' ? (
           <div className="space-y-5">
             {selectedProgramYearPlans.map((yearPlan) => (
               <div key={yearPlan.year} className="rounded-lg border border-slate-200 bg-white">
@@ -134,44 +214,66 @@ export function ScheduleClassTab({
                   {yearPlan.courses.length === 0 ? (
                     <p className="px-3 py-3 text-sm text-slate-500">No courses in this year.</p>
                   ) : (
-                    yearPlan.courses.map((course) => {
-                      const preferredOptions = getPreferredTimeslotOptions(course.professorName);
-                      const hasAvailability = preferredOptions.length > 0;
-                      const selectedPreferredTimeslots = preferredTimeslotByCourseId[course.id] ?? [];
-
-                      return (
-                        <div key={course.id} className="grid grid-cols-1 gap-2 px-3 py-2 md:grid-cols-[140px_1fr_240px_280px] md:items-center">
-                          <p className="text-sm font-medium text-slate-800">{course.code || '—'}</p>
-                          <p className="text-sm text-slate-700">{course.name || '—'}</p>
-                          <p className="text-sm text-slate-600">{course.professorName || 'Unassigned'}</p>
-                          {course.professorName ? (
-                            hasAvailability ? (
-                              <div>
-                                <MultiSelectDropdown
-                                  value={selectedPreferredTimeslots}
-                                  onChange={(next) =>
-                                    setPreferredTimeslotByCourseId((prev) => ({
-                                      ...prev,
-                                      [course.id]: next,
-                                    }))
-                                  }
-                                  options={preferredOptions}
-                                  placeholder="Select preferred timeslots"
-                                />
-                              </div>
-                            ) : (
-                              <p className="text-xs text-slate-500">No vailable timeslots. Please add in Reouces</p>
-                            )
-                          ) : (
-                            <p className="text-xs text-slate-500">Assign professor in Program Detail first.</p>
-                          )}
-                        </div>
-                      );
-                    })
+                    yearPlan.courses.map((course) => (
+                      <div
+                        key={course.id}
+                        className="grid grid-cols-1 gap-2 px-3 py-2 md:grid-cols-[140px_1fr_240px] md:items-center"
+                      >
+                        <p className="text-sm font-medium text-slate-800">{course.code || '—'}</p>
+                        <p className="text-sm text-slate-700">{course.name || '—'}</p>
+                        <p className="text-sm text-slate-600">{course.professorName || 'Unassigned'}</p>
+                      </div>
+                    ))
                   )}
                 </div>
               </div>
             ))}
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {professorPlans.length === 0 ? (
+              <p className="text-sm text-slate-500">No assigned professors found in this program curriculum.</p>
+            ) : (
+              professorPlans.map((professorPlan) => {
+                const selectedTimeslots = resolveSelectedTimeslotsForProfessor(professorPlan);
+                const hasAvailability = professorPlan.slotOptions.length > 0;
+
+                return (
+                  <div key={professorPlan.professorId} className="rounded-lg border border-slate-200 bg-white p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="text-sm font-semibold text-slate-800">{professorPlan.professorName}</p>
+                      <div className="w-full max-w-sm">
+                        {hasAvailability ? (
+                          <MultiSelectDropdown
+                            value={selectedTimeslots}
+                            onChange={(nextTimeslots) =>
+                              handleProfessorPreferredTimeslotsChange(professorPlan, nextTimeslots)
+                            }
+                            options={professorPlan.slotOptions}
+                            placeholder="Select preferred timeslots"
+                          />
+                        ) : (
+                          <p className="text-xs text-slate-500">
+                            No available timeslots configured in Resources for this professor.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {professorPlan.courses.map((course) => (
+                        <span
+                          key={course.id}
+                          className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-700"
+                        >
+                          Y{course.year}.{course.name}.{course.code}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         )}
       </Card>
@@ -195,33 +297,18 @@ export function ScheduleClassTab({
         />
       </Card>
 
-      <Card title="Constraints rules">
-        <div className="grid grid-cols-1 gap-x-8 gap-y-4 md:grid-cols-2">
-          <ToggleSwitch
-            label="Prioritize professor preferences"
-            checked={constraints.prioritizeProfessorPreferences}
-            onChange={() => toggleConstraint('prioritizeProfessorPreferences')}
-          />
-          <ToggleSwitch
-            label="Flexible slot fallback"
-            checked={constraints.flexibleSlotFallback}
-            onChange={() => toggleConstraint('flexibleSlotFallback')}
-          />
-          <ToggleSwitch
-            label="Professor cannot have overlapping classes"
-            checked={constraints.professorNoOverlap}
-            onChange={() => toggleConstraint('professorNoOverlap')}
-          />
-          <ToggleSwitch
-            label="Student groups cannot overlap"
-            checked={constraints.studentGroupsNoOverlap}
-            onChange={() => toggleConstraint('studentGroupsNoOverlap')}
-          />
-          <ToggleSwitch
-            label="Room capacity check"
-            checked={constraints.roomCapacityCheck}
-            onChange={() => toggleConstraint('roomCapacityCheck')}
-          />
+      <Card title="Constraint policy">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+          <p>
+            <span className="font-semibold text-slate-900">Hard constraints (fixed in backend code):</span>{' '}
+            professor overlap is not allowed, same-year overlap is not allowed, room capacity must satisfy enrollment,
+            and room-timeslot collisions are not allowed.
+          </p>
+          <p className="mt-1">
+            <span className="font-semibold text-slate-900">Soft constraints (fixed in backend code):</span>{' '}
+            only professor-selected preferred timeslots are currently active. Other soft constraints are
+            temporarily turned off.
+          </p>
         </div>
       </Card>
 

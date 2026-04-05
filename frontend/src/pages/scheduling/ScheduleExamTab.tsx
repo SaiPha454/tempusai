@@ -7,7 +7,6 @@ import { ExamDateCalendar } from '../../components/ExamDateCalendar';
 import { RoomSelector } from '../../components/RoomSelector';
 import { SelectedChipSummary } from '../../components/SelectedChipSummary';
 import { ExamSubjectItem } from '../../components/ExamSubjectItem';
-import { ToggleSwitch } from '../../components/ToggleSwitch';
 
 type SelectOption = {
   value: string;
@@ -42,15 +41,9 @@ type ExamFilterForm = {
   examType: string;
 };
 
-type ExamConstraintState = {
-  noTwoSubjectsSameDay: boolean;
-  noTwoSubjectsSameTimeslot: boolean;
-  noStudentSameDayTimeslot: boolean;
-  prioritizePreferredDayAndTimeslot: boolean;
-  fallbackFlexibleWhenUnavailable: boolean;
-};
-
 type ScheduleExamTabProps = {
+  examJobName: string;
+  setExamJobName: React.Dispatch<React.SetStateAction<string>>;
   isExamPeriodExpanded: boolean;
   setIsExamPeriodExpanded: React.Dispatch<React.SetStateAction<boolean>>;
   globalExamDates: string[];
@@ -98,23 +91,18 @@ type ScheduleExamTabProps = {
   ) => void;
   removeExamSubject: (programId: string, year: string, subjectId: string) => void;
   examTimeSlotOptions: SelectOption[];
-  examConstraints: ExamConstraintState;
-  toggleExamConstraint: (
-    key:
-      | 'noTwoSubjectsSameDay'
-      | 'noTwoSubjectsSameTimeslot'
-        | 'noStudentSameDayTimeslot'
-      | 'prioritizePreferredDayAndTimeslot'
-      | 'fallbackFlexibleWhenUnavailable',
-  ) => void;
   canGenerateExamSchedule: boolean;
   totalExamSubjects: number;
   examValidationMessage: string | null;
   isGeneratingExamSchedule: boolean;
+  examGenerationProgressPercent: number;
+  examGenerationStatusLabel: string | null;
   onGenerateExamSchedule: () => void;
 };
 
 export function ScheduleExamTab({
+  examJobName,
+  setExamJobName,
   isExamPeriodExpanded,
   setIsExamPeriodExpanded,
   globalExamDates,
@@ -152,16 +140,31 @@ export function ScheduleExamTab({
   updateExamSubjectTimeSlots,
   removeExamSubject,
   examTimeSlotOptions,
-  examConstraints,
-  toggleExamConstraint,
   canGenerateExamSchedule,
   totalExamSubjects,
   examValidationMessage,
   isGeneratingExamSchedule,
+  examGenerationProgressPercent,
+  examGenerationStatusLabel,
   onGenerateExamSchedule,
 }: ScheduleExamTabProps) {
   return (
     <div className="mt-6 space-y-6 pb-8">
+      <Card title="Scheduling Job">
+        <label className="block text-sm text-slate-700">
+          Scheduling job name <span className="text-rose-600">*</span>
+          <input
+            type="text"
+            value={examJobName}
+            onChange={(event) => setExamJobName(event.target.value)}
+            placeholder="Enter job name (e.g. Midterm Draft v1)"
+            maxLength={120}
+            required
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+          />
+        </label>
+      </Card>
+
       <Card
         title="Exam Period"
         headerRight={
@@ -451,42 +454,26 @@ export function ScheduleExamTab({
             prioritized, but may be relaxed when no feasible allocation exists.
           </p>
         </div>
-        <div className="grid grid-cols-1 gap-x-8 gap-y-4 md:grid-cols-2">
-          <ToggleSwitch
-            label="Same program/year cannot be on the same day"
-            checked={examConstraints.noTwoSubjectsSameDay}
-            onChange={() => toggleExamConstraint('noTwoSubjectsSameDay')}
-            variant="hard"
-          />
-          <ToggleSwitch
-            label="Same program/year cannot be in the same timeslot"
-            checked={examConstraints.noTwoSubjectsSameTimeslot}
-            onChange={() => toggleExamConstraint('noTwoSubjectsSameTimeslot')}
-            variant="hard"
-          />
-          <ToggleSwitch
-            label="One student cannot have two exams on same day/timeslot"
-            checked={examConstraints.noStudentSameDayTimeslot}
-            onChange={() => toggleExamConstraint('noStudentSameDayTimeslot')}
-            variant="hard"
-          />
-          <ToggleSwitch
-            label="Prioritize preferred day and timeslot"
-            checked={examConstraints.prioritizePreferredDayAndTimeslot}
-            onChange={() => toggleExamConstraint('prioritizePreferredDayAndTimeslot')}
-            variant="soft"
-          />
-          <ToggleSwitch
-            label="Fallback when preferred slot is unavailable (flexible)"
-            checked={examConstraints.fallbackFlexibleWhenUnavailable}
-            onChange={() => toggleExamConstraint('fallbackFlexibleWhenUnavailable')}
-            variant="soft"
-          />
-        </div>
       </Card>
 
       <Card title="Generation Review">
         <div className="space-y-2 text-sm text-slate-700">
+          {isGeneratingExamSchedule && (
+            <div className="mb-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-3">
+              <p className="text-xs font-semibold text-sky-800">
+                {examGenerationStatusLabel ?? 'Generating on backend'}
+              </p>
+              <div className="mt-2 h-2.5 w-full rounded-full bg-sky-100">
+                <div
+                  className="h-2.5 rounded-full bg-sky-600 transition-all"
+                  style={{ width: `${Math.max(10, examGenerationProgressPercent)}%` }}
+                />
+              </div>
+              <p className="mt-2 text-xs text-sky-700">
+                Progress {examGenerationProgressPercent}% · Source: backend job status
+              </p>
+            </div>
+          )}
           <p>
             Programs selected: <span className="font-semibold text-slate-900">{examProgramPlans.length}</span>
           </p>

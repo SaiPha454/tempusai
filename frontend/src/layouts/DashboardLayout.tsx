@@ -9,11 +9,13 @@ const newConversationEvent = 'tempusai:new-conversation';
 const sidebarRoutes = [
   { label: 'Chat', path: chatRoute, icon: MessageSquare },
   { label: 'Scheduling Manager', path: '/scheduling-manager', icon: CalendarClock },
+  { label: 'Draft Schedulings', path: '/draft-schedulings', icon: CalendarClock },
   { label: 'Resources', path: '/resources', icon: BookOpen },
 ] as const;
 
 const generatedSidebarRoutes = [
   { label: 'Generated Class Schedules', path: '/generated-class-schedules', icon: CalendarCheck2 },
+  { label: 'Generated Exam Schedules', path: '/generated-exam-schedules', icon: CalendarCheck2 },
 ] as const;
 
 const isResourcesRoute = (pathname: string) => pathname === '/resources' || pathname.startsWith('/programs/');

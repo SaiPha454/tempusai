@@ -67,7 +67,17 @@ const resourceTabs: ResourceTab[] = [
   'Special Enrollements',
 ];
 
-const baseSlotLabels = ['9:00 AM - 12:00 PM', '1:00 PM - 4:00 PM', '4:30 PM - 7:30 PM'];
+const baseSlotLabels = ['09:00 AM - 12:00 PM', '01:00 PM - 04:00 PM', '04:30 PM - 07:30 PM'];
+
+const canonicalTimeslotLabel = (label: string): string => {
+  const normalized = label.trim();
+  const map: Record<string, string> = {
+    '09:00 AM - 12:00 PM': '09:00 AM - 12:00 PM',
+    '01:00 PM - 04:00 PM': '01:00 PM - 04:00 PM',
+    '04:30 PM - 07:30 PM': '04:30 PM - 07:30 PM',
+  };
+  return map[normalized] ?? normalized;
+};
 const studyYears = ['1', '2', '3', '4'];
 
 const toRoomName = (value: string) => value.toUpperCase();
@@ -309,8 +319,9 @@ export function ResourcesPage() {
   const orderedTimeslotLabels = useMemo(() => {
     const labels = [...baseSlotLabels];
     timeslots.forEach((slot) => {
-      if (!labels.includes(slot.label)) {
-        labels.push(slot.label);
+      const normalizedLabel = canonicalTimeslotLabel(slot.label);
+      if (!labels.includes(normalizedLabel)) {
+        labels.push(normalizedLabel);
       }
     });
     return labels;
@@ -319,7 +330,7 @@ export function ResourcesPage() {
   const timeslotMap = useMemo(
     () =>
       new Map(
-        timeslots.map((slot) => [`${slot.day}__${slot.label}`, slot]),
+        timeslots.map((slot) => [`${slot.day}__${canonicalTimeslotLabel(slot.label)}`, slot]),
       ),
     [timeslots],
   );
