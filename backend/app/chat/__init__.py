@@ -1,0 +1,1 @@
+"""Scheduling chat module."""

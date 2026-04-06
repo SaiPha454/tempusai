@@ -59,6 +59,10 @@ Resource groups:
 - `/special-enrollments`
 - `/program-year-plans`
 
+Chat group:
+
+- `/chat`
+
 Each group supports CRUD:
 
 - `GET /`
@@ -66,6 +70,38 @@ Each group supports CRUD:
 - `POST /`
 - `PUT /{id}`
 - `DELETE /{id}`
+
+### Scheduling RAG Chat
+
+The scheduling chatbot is exposed at:
+
+- `POST /api/v1/chat/ask`
+
+Request payload:
+
+```json
+{
+	"question": "How many professors are teaching on Monday across all programs?"
+}
+```
+
+Response includes:
+
+- `status` (`answered` or `rejected`)
+- `answer`
+- optional SQL/debug fields (`sql_query`, `rows_preview`, `row_count`) based on settings
+
+Chat setup requirements:
+
+- `OPENAI_API_KEY`
+- `OPENAI_CHAT_MODEL` (default `gpt-4o-mini`)
+- `OPENAI_EMBEDDING_MODEL` (default `text-embedding-3-small`)
+
+Run migration to create pgvector support table:
+
+```bash
+alembic upgrade head
+```
 
 ### Notes for Future Scheduling + Prolog
 
