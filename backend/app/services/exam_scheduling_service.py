@@ -294,6 +294,33 @@ class ExamSchedulingService:
 
             entry.manually_adjusted = True
 
+        self.db.commit()
+        return self.get_exam_draft(snapshot.id)
+
+    def commit_exam_draft(self, snapshot_id: UUID, payload: SaveExamScheduleDraftRequest) -> ExamScheduleDraftRead:
+        snapshot = self._get_exam_snapshot(snapshot_id)
+        entry_by_id = {entry.id: entry for entry in snapshot.entries}
+
+        for patch in payload.entries:
+            entry = entry_by_id.get(patch.id)
+            if not entry:
+                raise bad_request("Draft entry does not belong to this exam snapshot")
+
+            entry.exam_date = patch.exam_date
+            entry.timeslot_code = patch.timeslot_code
+
+            if patch.room_id is not None:
+                room = self.db.get(Room, patch.room_id)
+                if not room:
+                    raise bad_request("Room does not exist")
+                entry.room_id = room.id
+                entry.room = room
+            else:
+                entry.room_id = None
+                entry.room = None
+
+            entry.manually_adjusted = True
+
         # Ensure relationship/FK changes are synchronized before conflict checks.
         self.db.flush()
 

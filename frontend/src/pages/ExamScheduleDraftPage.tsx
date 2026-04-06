@@ -10,6 +10,7 @@ import {
   resolveProgramColorTheme,
 } from '../utils/programColorTheme';
 import {
+  commitExamScheduleDraft,
   deleteExamScheduleDraft,
   getExamScheduleDraft,
   getExamScheduleJob,
@@ -160,6 +161,7 @@ export function ExamScheduleDraftPage() {
   const [hoveredCellKey, setHoveredCellKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [committing, setCommitting] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [preferredWeekdaysByProgramYearCourseKey, setPreferredWeekdaysByProgramYearCourseKey] = useState<
@@ -471,6 +473,43 @@ export function ExamScheduleDraftPage() {
     () => entriesWithRecomputedConflicts.filter((entry) => entry.conflicts.length > 0).length,
     [entriesWithRecomputedConflicts],
   );
+
+  const hasUnsavedChanges = useMemo(() => {
+    if (!draft) {
+      return false;
+    }
+
+    const savedById = new Map(
+      draft.entries.map((entry) => [
+        entry.id,
+        {
+          exam_date: entry.exam_date,
+          timeslot_code: entry.timeslot_code,
+          room_id: entry.room_id,
+        },
+      ]),
+    );
+
+    if (savedById.size !== localEntries.length) {
+      return true;
+    }
+
+    for (const entry of localEntries) {
+      const saved = savedById.get(entry.id);
+      if (!saved) {
+        return true;
+      }
+      if (
+        saved.exam_date !== entry.exam_date ||
+        saved.timeslot_code !== entry.timeslot_code ||
+        saved.room_id !== entry.room_id
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }, [draft, localEntries]);
 
   const conflictSummary = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -828,11 +867,38 @@ export function ExamScheduleDraftPage() {
       setDraft(saved);
       setLocalEntries(saved.entries);
       setErrorMessage(null);
-      navigate('/generated-exam-schedules');
+      window.alert('Staging drafts saved successfully.');
     } catch (error) {
-      setErrorMessage(readErrorMessage(error, 'Failed to save exam draft. Please review constraints and try again.'));
+      setErrorMessage(readErrorMessage(error, 'Failed to save staging exam draft. Please try again.'));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleCommitSchedule = async () => {
+    if (!snapshotId) {
+      return;
+    }
+
+    try {
+      setCommitting(true);
+      const saved = await commitExamScheduleDraft(snapshotId, {
+        entries: localEntries.map((entry) => ({
+          id: entry.id,
+          exam_date: entry.exam_date,
+          timeslot_code: entry.timeslot_code,
+          room_id: entry.room_id,
+        })),
+      });
+
+      setDraft(saved);
+      setLocalEntries(saved.entries);
+      setErrorMessage(null);
+      navigate('/generated-exam-schedules');
+    } catch (error) {
+      setErrorMessage(readErrorMessage(error, 'Failed to commit exam schedule. Resolve conflicts and try again.'));
+    } finally {
+      setCommitting(false);
     }
   };
 
@@ -1091,27 +1157,44 @@ export function ExamScheduleDraftPage() {
             Job name: {draft.job_name ?? `Exam Draft ${draft.id.slice(0, 8)}`}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="ml-auto flex items-center justify-end gap-2">
           <button
             type="button"
             onClick={handleDeleteDraft}
-            disabled={deleting || saving}
+            disabled={deleting || saving || committing}
             className="rounded-lg border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
           >
-            {deleting ? 'Deleting...' : 'Delete Draft'}
+            {deleting ? 'Deleting...' : 'Delete Draft/Schedule'}
           </button>
           <button
             type="button"
             onClick={handleSaveDraft}
-            disabled={saving || deleting || unassignedEntriesCount > 0}
+            disabled={saving || deleting || committing || !hasUnsavedChanges}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+          >
+            {saving ? 'Saving...' : 'Save Staging Drafts'}
+          </button>
+          <button
+            type="button"
+            onClick={handleCommitSchedule}
+            disabled={
+              saving ||
+              deleting ||
+              committing ||
+              unassignedEntriesCount > 0 ||
+              conflictCount > 0 ||
+              (draft?.status === 'confirmed' && !hasUnsavedChanges)
+            }
             className="rounded-lg bg-[#0A64BC] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0959A8] disabled:cursor-not-allowed disabled:bg-slate-300"
             title={
-              unassignedEntriesCount > 0
-                ? 'Assign exam date, slot, and room for all entries before saving.'
+              unassignedEntriesCount > 0 || conflictCount > 0
+                ? 'Resolve all unassigned entries and conflicts before committing.'
+                : draft?.status === 'confirmed' && !hasUnsavedChanges
+                  ? 'Make and save staging changes before committing.'
                 : undefined
             }
           >
-            {saving ? 'Saving...' : 'Confirm & Save'}
+            {committing ? 'Committing...' : 'Commit Schedule'}
           </button>
         </div>
       </div>
@@ -1138,7 +1221,7 @@ export function ExamScheduleDraftPage() {
               ))}
           </div>
           <p className="mt-2 text-xs text-slate-500">
-            Student overlap and room capacity are always revalidated by backend during Confirm & Save.
+            Student overlap and room capacity are always revalidated by backend during Commit Schedule.
           </p>
         </Card>
       )}

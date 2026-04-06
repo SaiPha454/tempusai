@@ -228,7 +228,7 @@ export function GeneratedClassSchedulesPage() {
     if (!schedule) {
       return;
     }
-    navigate(`/scheduling-draft?snapshotId=${schedule.id}`);
+    navigate(`/scheduling-draft?snapshotId=${schedule.id}&fromGenerated=1`);
   };
 
   return (

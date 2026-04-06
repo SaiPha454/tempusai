@@ -8,7 +8,6 @@ import {
   generateExamSchedule,
   getExamScheduleJob,
   getLatestConfirmedClassSchedule,
-  getLatestClassScheduleDraft,
   listClassDraftSummary,
   listConfirmedClassScheduleSummary,
   listConfirmedExamScheduleSummary,
@@ -172,7 +171,6 @@ export function SchedulingManagerPage() {
   const [selectedRooms, setSelectedRooms] = useState<string[]>([]);
   const [preferredTimeslotByCourseId, setPreferredTimeslotByCourseId] = useState<Record<string, string[]>>({});
   const [isGeneratingClassSchedule, setIsGeneratingClassSchedule] = useState(false);
-  const [isCheckingExistingDraft, setIsCheckingExistingDraft] = useState(false);
   const [isGeneratingExamSchedule, setIsGeneratingExamSchedule] = useState(false);
   const [examGenerationError, setExamGenerationError] = useState<string | null>(null);
   const [examJobName, setExamJobName] = useState('');
@@ -496,40 +494,6 @@ export function SchedulingManagerPage() {
     };
   }, [confirmedClassEntriesByProgram, examFilters.studyProgram]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const openExistingDraftIfAny = async () => {
-      if (activeTab !== 'Schedule Class' || !selectedStudyProgram) {
-        return;
-      }
-
-      try {
-        setIsCheckingExistingDraft(true);
-        const existingDraft = await getLatestClassScheduleDraft(selectedStudyProgram);
-        if (cancelled) {
-          return;
-        }
-        navigate(`/scheduling-draft?snapshotId=${existingDraft.id}`);
-      } catch (error) {
-        const statusCode = (error as AxiosError)?.response?.status;
-        if (!cancelled && statusCode && statusCode !== 404) {
-          console.error('Failed to check existing draft', error);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsCheckingExistingDraft(false);
-        }
-      }
-    };
-
-    void openExistingDraftIfAny();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeTab, navigate, selectedStudyProgram]);
-
   const getOptionLabel = (options: SelectOption[], value: string, fallback = 'N/A') =>
     options.find((option) => option.value === value)?.label ?? fallback;
 
@@ -842,7 +806,7 @@ export function SchedulingManagerPage() {
   const canGenerateExamSchedule =
     examValidationMessage === null;
 
-  const studyProgramOptionsWithDraftFlag = useMemo(
+  const studyProgramOptionsWithCounts = useMemo(
     () =>
       studyProgramOptions.map((option) => {
         if (!option.value) {
@@ -850,38 +814,27 @@ export function SchedulingManagerPage() {
         }
 
         const draftCount = draftCountByProgram[option.value] ?? 0;
+        const confirmedCount = confirmedCountByProgram[option.value] ?? 0;
+        const statusTokens: string[] = [];
+
         if (draftCount > 0) {
-          return {
-            ...option,
-            label: `${option.label} (draft)`,
-          };
+          statusTokens.push(`${draftCount} draft${draftCount > 1 ? 's' : ''}`);
+        }
+        if (confirmedCount > 0) {
+          statusTokens.push(`${confirmedCount} schedule${confirmedCount > 1 ? 's' : ''}`);
         }
 
-        const confirmedCount = confirmedCountByProgram[option.value] ?? 0;
-        if (confirmedCount > 0) {
+        if (statusTokens.length > 0) {
           return {
             ...option,
-            label: `${option.label} (scheduled)`,
+            label: `${option.label} (${statusTokens.join(', ')})`,
           };
         }
 
         return option;
       }),
-    [confirmedCountByProgram, draftCountByProgram],
+    [confirmedCountByProgram, draftCountByProgram, studyProgramOptions],
   );
-
-  const studyProgramOptionColorByValue = useMemo(() => {
-    const colorMap: Record<string, string> = {};
-    for (const option of studyProgramOptions) {
-      if (!option.value) {
-        continue;
-      }
-      if ((draftCountByProgram[option.value] ?? 0) > 0) {
-        colorMap[option.value] = '#dc2626';
-      }
-    }
-    return colorMap;
-  }, [draftCountByProgram]);
 
   const handleGenerateClassSchedule = async () => {
     if (!selectedStudyProgram || selectedProgramCourseCount === 0) {
@@ -1011,8 +964,7 @@ export function SchedulingManagerPage() {
         <ScheduleClassTab
           selectedStudyProgram={selectedStudyProgram}
           setSelectedStudyProgram={setSelectedStudyProgram}
-          studyProgramOptions={studyProgramOptionsWithDraftFlag}
-          studyProgramOptionColorByValue={studyProgramOptionColorByValue}
+          studyProgramOptions={studyProgramOptionsWithCounts}
           selectedProgramCourseCount={selectedProgramCourseCount}
           selectedProgramYearPlans={selectedProgramYearPlans}
           getPreferredTimeslotOptions={getPreferredTimeslotOptions}
@@ -1025,7 +977,7 @@ export function SchedulingManagerPage() {
           toggleRoom={toggleRoom}
           roomCapacityMap={roomCapacityMap}
           removeRoom={removeRoom}
-          isGenerating={isGeneratingClassSchedule || isCheckingExistingDraft}
+          isGenerating={isGeneratingClassSchedule}
           onGenerate={handleGenerateClassSchedule}
         />
       )}

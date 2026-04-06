@@ -236,7 +236,7 @@ export function GeneratedExamSchedulesPage() {
               <div className="mt-3 flex justify-end">
                 <button
                   type="button"
-                  onClick={() => navigate(`/exam-scheduling-draft?snapshotId=${selectedSchedule.id}`)}
+                  onClick={() => navigate(`/exam-scheduling-draft?snapshotId=${selectedSchedule.id}&fromGenerated=1`)}
                   className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
                 >
                   Edit

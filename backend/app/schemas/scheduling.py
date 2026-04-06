@@ -26,6 +26,16 @@ class ProgramDraftSummaryRead(BaseModel):
     draft_count: int
 
 
+class ClassDraftScheduleSummaryRead(BaseModel):
+    id: UUID
+    program_value: str
+    program_label: str
+    status: str
+    entry_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
 class ProgramConfirmedScheduleSummaryRead(BaseModel):
     program_value: str
     program_label: str

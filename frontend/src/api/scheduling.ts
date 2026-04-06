@@ -23,6 +23,16 @@ export type ProgramDraftSummaryDto = {
   draft_count: number;
 };
 
+export type ClassDraftScheduleSummaryDto = {
+  id: string;
+  program_value: string;
+  program_label: string;
+  status: string;
+  entry_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ProgramConfirmedScheduleSummaryDto = {
   program_value: string;
   program_label: string;
@@ -252,12 +262,25 @@ export async function saveExamScheduleDraft(
   return response.data;
 }
 
+export async function commitExamScheduleDraft(
+  snapshotId: string,
+  payload: SaveExamScheduleDraftPayload,
+): Promise<ExamScheduleDraftDto> {
+  const response = await apiClient.post<ExamScheduleDraftDto>(`${examBasePath}/drafts/${snapshotId}/commit`, payload);
+  return response.data;
+}
+
 export async function deleteExamScheduleDraft(snapshotId: string): Promise<void> {
   await apiClient.delete(`${examBasePath}/drafts/${snapshotId}`);
 }
 
 export async function listClassDraftSummary(): Promise<ProgramDraftSummaryDto[]> {
   const response = await apiClient.get<ProgramDraftSummaryDto[]>(`${classBasePath}/drafts/summary`);
+  return response.data;
+}
+
+export async function listClassDraftSchedules(): Promise<ClassDraftScheduleSummaryDto[]> {
+  const response = await apiClient.get<ClassDraftScheduleSummaryDto[]>(`${classBasePath}/drafts`);
   return response.data;
 }
 
@@ -297,11 +320,24 @@ export async function deleteLatestConfirmedClassSchedule(programValue: string): 
   });
 }
 
+export async function makeClassScheduleAsDraft(snapshotId: string): Promise<ClassScheduleDraftDto> {
+  const response = await apiClient.post<ClassScheduleDraftDto>(`${classBasePath}/schedules/${snapshotId}/make-draft`);
+  return response.data;
+}
+
 export async function saveClassScheduleDraft(
   snapshotId: string,
   payload: SaveClassScheduleDraftPayload,
 ): Promise<ClassScheduleDraftDto> {
   const response = await apiClient.put<ClassScheduleDraftDto>(`${classBasePath}/drafts/${snapshotId}`, payload);
+  return response.data;
+}
+
+export async function commitClassScheduleDraft(
+  snapshotId: string,
+  payload: SaveClassScheduleDraftPayload,
+): Promise<ClassScheduleDraftDto> {
+  const response = await apiClient.post<ClassScheduleDraftDto>(`${classBasePath}/drafts/${snapshotId}/commit`, payload);
   return response.data;
 }
 

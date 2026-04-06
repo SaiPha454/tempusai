@@ -18,6 +18,7 @@ from app.models.resource import (
     Timeslot,
 )
 from app.schemas.scheduling import (
+    ClassDraftScheduleSummaryRead,
     ClassScheduleDraftRead,
     ClassScheduleGenerateRequest,
     ClassScheduleJobRead,
@@ -224,6 +225,41 @@ class SchedulingService:
             for program_value, program_label, draft_count in rows
         ]
 
+    def list_class_draft_summaries(self) -> list[ClassDraftScheduleSummaryRead]:
+        snapshots = list(
+            self.db.scalars(
+                select(ScheduleClassSnapshot)
+                .where(ScheduleClassSnapshot.status == "draft")
+                .options(joinedload(ScheduleClassSnapshot.program))
+                .order_by(ScheduleClassSnapshot.updated_at.desc(), ScheduleClassSnapshot.created_at.desc())
+            )
+        )
+
+        if not snapshots:
+            return []
+
+        entry_counts = {
+            snapshot_id: count
+            for snapshot_id, count in self.db.execute(
+                select(ScheduleClassEntry.snapshot_id, func.count(ScheduleClassEntry.id))
+                .where(ScheduleClassEntry.snapshot_id.in_([snapshot.id for snapshot in snapshots]))
+                .group_by(ScheduleClassEntry.snapshot_id)
+            )
+        }
+
+        return [
+            ClassDraftScheduleSummaryRead(
+                id=snapshot.id,
+                program_value=snapshot.program.value,
+                program_label=snapshot.program.label,
+                status=snapshot.status,
+                entry_count=entry_counts.get(snapshot.id, 0),
+                created_at=snapshot.created_at,
+                updated_at=snapshot.updated_at,
+            )
+            for snapshot in snapshots
+        ]
+
     def list_program_confirmed_schedule_summary(self) -> list[ProgramConfirmedScheduleSummaryRead]:
         rows = self.db.execute(
             select(
@@ -317,12 +353,47 @@ class SchedulingService:
                 if not slot:
                     raise bad_request("Timeslot does not exist")
                 entry.timeslot_id = slot.id
+            else:
+                entry.timeslot_id = None
 
             if patch.room_id is not None:
                 room = self.db.get(Room, patch.room_id)
                 if not room:
                     raise bad_request("Room does not exist")
                 entry.room_id = room.id
+            else:
+                entry.room_id = None
+
+            entry.manually_adjusted = True
+
+        self.db.commit()
+        refreshed_snapshot = self._get_snapshot(snapshot_id)
+        return self.get_class_draft(refreshed_snapshot.id)
+
+    def commit_class_draft(self, snapshot_id: UUID, payload: SaveClassScheduleDraftRequest) -> ClassScheduleDraftRead:
+        snapshot = self._get_snapshot(snapshot_id)
+        entry_by_id = {entry.id: entry for entry in snapshot.entries}
+
+        for patch in payload.entries:
+            entry = entry_by_id.get(patch.id)
+            if not entry:
+                raise bad_request("Draft entry does not belong to this snapshot")
+
+            if patch.timeslot_id is not None:
+                slot = self.db.get(Timeslot, patch.timeslot_id)
+                if not slot:
+                    raise bad_request("Timeslot does not exist")
+                entry.timeslot_id = slot.id
+            else:
+                entry.timeslot_id = None
+
+            if patch.room_id is not None:
+                room = self.db.get(Room, patch.room_id)
+                if not room:
+                    raise bad_request("Room does not exist")
+                entry.room_id = room.id
+            else:
+                entry.room_id = None
 
             entry.manually_adjusted = True
 
@@ -345,9 +416,29 @@ class SchedulingService:
             ):
                 raise bad_request("Cannot save schedule due to professor overlap with an existing confirmed schedule")
 
+        existing_confirmed = self.db.scalar(
+            select(ScheduleClassSnapshot.id)
+            .where(ScheduleClassSnapshot.program_id == snapshot.program_id)
+            .where(ScheduleClassSnapshot.status == "confirmed")
+            .where(ScheduleClassSnapshot.id != snapshot.id)
+            .limit(1)
+        )
+        if existing_confirmed is not None:
+            raise bad_request(
+                "This program already has a committed schedule. Delete it or convert it to draft before committing another schedule."
+            )
+
         snapshot.status = "confirmed"
 
         self.db.commit()
+        refreshed_snapshot = self._get_snapshot(snapshot_id)
+        return self.get_class_draft(refreshed_snapshot.id)
+
+    def make_class_schedule_as_draft(self, snapshot_id: UUID) -> ClassScheduleDraftRead:
+        snapshot = self._get_snapshot(snapshot_id)
+        if snapshot.status != "draft":
+            snapshot.status = "draft"
+            self.db.commit()
         refreshed_snapshot = self._get_snapshot(snapshot_id)
         return self.get_class_draft(refreshed_snapshot.id)
 

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import db_dependency
 from app.schemas.scheduling import (
+    ClassDraftScheduleSummaryRead,
     ClassScheduleDraftRead,
     ClassScheduleGenerateRequest,
     ClassScheduleJobRead,
@@ -52,6 +53,15 @@ def list_class_draft_summary(db: Session = Depends(db_dependency)) -> list[Progr
 
 
 @router.get(
+    "/class/drafts",
+    response_model=list[ClassDraftScheduleSummaryRead],
+    summary="List class drafts",
+)
+def list_class_drafts(db: Session = Depends(db_dependency)) -> list[ClassDraftScheduleSummaryRead]:
+    return SchedulingService(db).list_class_draft_summaries()
+
+
+@router.get(
     "/class/schedules/summary",
     response_model=list[ProgramConfirmedScheduleSummaryRead],
     summary="List confirmed class schedule counts by program",
@@ -85,6 +95,15 @@ def delete_latest_confirmed_class_schedule(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.post(
+    "/class/schedules/{snapshot_id}/make-draft",
+    response_model=ClassScheduleDraftRead,
+    summary="Convert class schedule snapshot to draft",
+)
+def make_class_schedule_as_draft(snapshot_id: UUID, db: Session = Depends(db_dependency)) -> ClassScheduleDraftRead:
+    return SchedulingService(db).make_class_schedule_as_draft(snapshot_id)
+
+
 @router.get(
     "/class/drafts/latest",
     response_model=ClassScheduleDraftRead,
@@ -109,6 +128,19 @@ def save_class_schedule_draft(
     db: Session = Depends(db_dependency),
 ) -> ClassScheduleDraftRead:
     return SchedulingService(db).save_class_draft(snapshot_id, payload)
+
+
+@router.post(
+    "/class/drafts/{snapshot_id}/commit",
+    response_model=ClassScheduleDraftRead,
+    summary="Commit class scheduling draft",
+)
+def commit_class_schedule_draft(
+    snapshot_id: UUID,
+    payload: SaveClassScheduleDraftRequest,
+    db: Session = Depends(db_dependency),
+) -> ClassScheduleDraftRead:
+    return SchedulingService(db).commit_class_draft(snapshot_id, payload)
 
 
 @router.delete(
@@ -187,6 +219,20 @@ def save_exam_schedule_draft(
     db: Session = Depends(db_dependency),
 ) -> ExamScheduleDraftRead:
     return ExamSchedulingService(db).save_exam_draft(snapshot_id, payload)
+
+
+@router.post(
+    "/exam/drafts/{snapshot_id}/commit",
+    response_model=ExamScheduleDraftRead,
+    summary="Commit exam scheduling draft",
+    tags=["scheduling-exam"],
+)
+def commit_exam_schedule_draft(
+    snapshot_id: UUID,
+    payload: SaveExamScheduleDraftRequest,
+    db: Session = Depends(db_dependency),
+) -> ExamScheduleDraftRead:
+    return ExamSchedulingService(db).commit_exam_draft(snapshot_id, payload)
 
 
 @router.delete(

@@ -4,9 +4,11 @@ import { Card } from '../components/Card';
 import { Tabs } from '../components/Tabs';
 import { listRooms, type RoomDto } from '../api/resources';
 import {
+  commitClassScheduleDraft,
   deleteClassScheduleDraft,
   getClassScheduleDraft,
   getClassScheduleJob,
+  makeClassScheduleAsDraft,
   saveClassScheduleDraft,
   type ClassScheduleDraftDto,
   type ScheduleClassEntryDto,
@@ -216,6 +218,8 @@ export function ScheduleDraftPage() {
   const [draggingEntryId, setDraggingEntryId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [committing, setCommitting] = useState(false);
+  const [convertingToDraft, setConvertingToDraft] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeConflictPopover, setActiveConflictPopover] = useState<{ entryId: string; code: string } | null>(null);
@@ -415,6 +419,32 @@ export function ScheduleDraftPage() {
     [localEntries],
   );
 
+  const hasUnsavedChanges = useMemo(() => {
+    if (!draft) {
+      return false;
+    }
+
+    const savedById = new Map(
+      draft.entries.map((entry) => [entry.id, { timeslot_id: entry.timeslot_id, room_id: entry.room_id }]),
+    );
+
+    if (savedById.size !== localEntries.length) {
+      return true;
+    }
+
+    for (const entry of localEntries) {
+      const saved = savedById.get(entry.id);
+      if (!saved) {
+        return true;
+      }
+      if (saved.timeslot_id !== entry.timeslot_id || saved.room_id !== entry.room_id) {
+        return true;
+      }
+    }
+
+    return false;
+  }, [draft, localEntries]);
+
   const unassignedEntriesCount = useMemo(
     () => localEntries.filter((entry) => !entry.timeslot_id || !entry.room_id).length,
     [localEntries],
@@ -439,7 +469,7 @@ export function ScheduleDraftPage() {
           entry.conflicts.push({ code: 'room_overlap', message: conflictMessageByCode.room_overlap });
         }
 
-        if (draft?.constraints.roomCapacityCheck) {
+        if (draft?.constraints.roomCapacityCheck !== false) {
           const roomCapacity = roomById.get(entry.room_id)?.capacity ?? 0;
           const requiredCapacity = entry.required_capacity ?? 0;
           if (requiredCapacity > roomCapacity) {
@@ -453,7 +483,7 @@ export function ScheduleDraftPage() {
         byRoomSlot.set(key, items);
       }
 
-      if (draft?.constraints.professorNoOverlap && entry.timeslot_id && entry.professor_id) {
+      if (draft?.constraints.professorNoOverlap !== false && entry.timeslot_id && entry.professor_id) {
         const occupiedKey = `${entry.professor_id}-${entry.timeslot_id}`;
         if (confirmedOccupancyByProfessorTimeslot.has(occupiedKey)) {
           entry.conflicts.push({ code: 'professor_overlap', message: conflictMessageByCode.professor_overlap });
@@ -465,7 +495,7 @@ export function ScheduleDraftPage() {
         byProfessorSlot.set(key, items);
       }
 
-      if (draft?.constraints.studentGroupsNoOverlap && entry.timeslot_id) {
+      if (draft?.constraints.studentGroupsNoOverlap !== false && entry.timeslot_id) {
         const key = `${entry.year}-${entry.timeslot_id}`;
         const items = byYearSlot.get(key) ?? [];
         items.push(entry);
@@ -692,7 +722,7 @@ export function ScheduleDraftPage() {
       return false;
     }
 
-    if (draft?.constraints.roomCapacityCheck) {
+    if (draft?.constraints.roomCapacityCheck !== false) {
       const roomCapacity = roomById.get(roomId)?.capacity ?? 0;
       const requiredCapacity = entry.required_capacity ?? 0;
       if (requiredCapacity > roomCapacity) {
@@ -700,7 +730,7 @@ export function ScheduleDraftPage() {
       }
     }
 
-    if (draft?.constraints.professorNoOverlap && entry.professor_id) {
+    if (draft?.constraints.professorNoOverlap !== false && entry.professor_id) {
       const professorKey = `${entry.professor_id}-${targetTimeslotId}`;
       if (confirmedOccupancyByProfessorTimeslot.has(professorKey)) {
         return false;
@@ -717,19 +747,30 @@ export function ScheduleDraftPage() {
       }
 
       if (
-        draft?.constraints.professorNoOverlap &&
+        draft?.constraints.professorNoOverlap !== false &&
         entry.professor_id &&
         candidate.professor_id === entry.professor_id
       ) {
         return false;
       }
 
-      if (draft?.constraints.studentGroupsNoOverlap && candidate.year === entry.year) {
+      if (draft?.constraints.studentGroupsNoOverlap !== false && candidate.year === entry.year) {
         return false;
       }
     }
 
     return true;
+  };
+
+  const canDropEntryInRoomCell = (day: string, bucket: MatrixBucket, roomId: string): boolean => {
+    const targetTimeslotId = resolveTimeslotId(day, bucket);
+    if (!targetTimeslotId) {
+      return false;
+    }
+
+    // Draft entries may overlap during manual staging, but committed occupancy is always blocked.
+    const occupiedKey = `${roomId}-${targetTimeslotId}`;
+    return !confirmedOccupancyByRoomTimeslot.has(occupiedKey);
   };
 
   const canPlaceEntryInTimeCell = (entry: LocalEntry, day: string, bucket: MatrixBucket): boolean => {
@@ -746,8 +787,14 @@ export function ScheduleDraftPage() {
     );
 
     const uniqueRoomIds = Array.from(new Set(preferredRoomIds));
-    const validRoomId = uniqueRoomIds.find((roomId) => canPlaceEntryInRoomCell(entry, day, bucket, roomId));
-    return validRoomId ?? null;
+    const strictlyValidRoomId = uniqueRoomIds.find((roomId) => canPlaceEntryInRoomCell(entry, day, bucket, roomId));
+    if (strictlyValidRoomId) {
+      return strictlyValidRoomId;
+    }
+
+    // If no conflict-free room exists, allow staging on a room that is not blocked by committed occupancy.
+    const draftStageRoomId = uniqueRoomIds.find((roomId) => canDropEntryInRoomCell(day, bucket, roomId));
+    return draftStageRoomId ?? null;
   };
 
   const handleSaveDraft = async () => {
@@ -768,11 +815,65 @@ export function ScheduleDraftPage() {
       setDraft(savedDraft);
       setLocalEntries(savedDraft.entries);
       setErrorMessage(null);
-      navigate('/generated-class-schedules');
+      window.alert('Staging drafts saved successfully.');
     } catch {
-      setErrorMessage('Failed to save draft. Please try again.');
+      setErrorMessage('Failed to save staging draft. Please try again.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleCommitSchedule = async () => {
+    if (!snapshotId) {
+      return;
+    }
+
+    // Recompute local hard-constraint conflicts before commit to keep frontend state aligned.
+    const validatedEntries = recomputeLocalConflicts(localEntries);
+    const hasBlockingConflicts = validatedEntries.some((entry) => entry.conflicts.length > 0);
+    if (hasBlockingConflicts) {
+      setLocalEntries(validatedEntries);
+      setErrorMessage('Cannot commit schedule while hard-constraint conflicts remain.');
+      return;
+    }
+
+    try {
+      setCommitting(true);
+      const savedDraft = await commitClassScheduleDraft(snapshotId, {
+        entries: validatedEntries.map((entry) => ({
+          id: entry.id,
+          timeslot_id: entry.timeslot_id,
+          room_id: entry.room_id,
+        })),
+      });
+
+      setDraft(savedDraft);
+      setLocalEntries(savedDraft.entries);
+      setErrorMessage(null);
+      navigate('/generated-class-schedules');
+    } catch {
+      setErrorMessage('Failed to commit schedule. Resolve remaining conflicts and try again.');
+    } finally {
+      setCommitting(false);
+    }
+  };
+
+  const handleMakeAsDraft = async () => {
+    if (!snapshotId) {
+      return;
+    }
+
+    try {
+      setConvertingToDraft(true);
+      const updated = await makeClassScheduleAsDraft(snapshotId);
+      setDraft(updated);
+      setLocalEntries(updated.entries);
+      setErrorMessage(null);
+      window.alert('Schedule was converted to draft successfully.');
+    } catch {
+      setErrorMessage('Failed to convert schedule to draft. Please try again.');
+    } finally {
+      setConvertingToDraft(false);
     }
   };
 
@@ -980,19 +1081,52 @@ export function ScheduleDraftPage() {
           <button
             type="button"
             onClick={handleDeleteDraft}
-            disabled={deleting || saving}
+            disabled={deleting || saving || committing || convertingToDraft}
             className="rounded-lg border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
           >
-            {deleting ? 'Deleting...' : 'Delete Draft'}
+            {deleting ? 'Deleting...' : 'Delete Draft/Schedule'}
           </button>
+          {draft.status === 'draft' ? (
+            <button
+              type="button"
+              onClick={handleSaveDraft}
+              disabled={saving || deleting || committing || convertingToDraft || !hasUnsavedChanges}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+            >
+              {saving ? 'Saving...' : 'Save Staging Drafts'}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleMakeAsDraft}
+              disabled={saving || deleting || committing || convertingToDraft}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+            >
+              {convertingToDraft ? 'Converting...' : 'Make as Draft'}
+            </button>
+          )}
           <button
             type="button"
-            onClick={handleSaveDraft}
-            disabled={saving || deleting || unassignedEntriesCount > 0}
+            onClick={handleCommitSchedule}
+            disabled={
+              saving ||
+              deleting ||
+              committing ||
+              convertingToDraft ||
+              unassignedEntriesCount > 0 ||
+              conflictedEntriesCount > 0 ||
+              (draft?.status === 'confirmed' && !hasUnsavedChanges)
+            }
             className="rounded-lg bg-[#0A64BC] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0959A8] disabled:cursor-not-allowed disabled:bg-slate-300"
-            title={unassignedEntriesCount > 0 ? 'Assign room and timeslot for all courses before saving.' : undefined}
+            title={
+              unassignedEntriesCount > 0 || conflictedEntriesCount > 0
+                ? 'Resolve all unassigned entries and conflicts before committing.'
+                : draft?.status === 'confirmed' && !hasUnsavedChanges
+                  ? 'Make and save staging changes before committing.'
+                : undefined
+            }
           >
-            {saving ? 'Saving...' : 'Save'}
+            {committing ? 'Committing...' : 'Commit Schedule'}
           </button>
         </div>
       </div>
@@ -1081,8 +1215,7 @@ export function ScheduleDraftPage() {
                               !isUnavailableCell &&
                               Boolean(draggingEntry) &&
                               canPlaceEntryInTimeCell(draggingEntry as LocalEntry, day, row.key);
-                            const isDroppableCell =
-                              !isUnavailableCell && (!draggingEntry || isValidPlacementTarget);
+                            const isDroppableCell = !isUnavailableCell;
                             const cellKey = `${year}-${row.key}-${day}`;
                             const entriesInCell = yearEntries.filter((entry) => {
                               if (!entry.timeslot_id) {
@@ -1203,8 +1336,7 @@ export function ScheduleDraftPage() {
                             !isUnavailableCell &&
                             Boolean(draggingEntry) &&
                             canPlaceEntryInRoomCell(draggingEntry as LocalEntry, day, row.key, room.id);
-                          const isDroppableCell =
-                            !isUnavailableCell && (!draggingEntry || isValidPlacementTarget);
+                          const isDroppableCell = !isUnavailableCell;
                           const cellKey = `${room.id}-${row.key}-${day}`;
                           const entriesInCell = localEntries.filter((entry) => {
                             if (!entry.timeslot_id || entry.room_id !== room.id) {
