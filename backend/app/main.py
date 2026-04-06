@@ -49,6 +49,10 @@ openapi_tags = [
         "name": "scheduling-exam",
         "description": "Exam schedule generation, draft retrieval, adjustment, and confirmation operations.",
     },
+    {
+        "name": "scheduling-chat",
+        "description": "RAG-style scheduling chatbot that answers natural-language questions using PostgreSQL scheduling data.",
+    },
 ]
 
 

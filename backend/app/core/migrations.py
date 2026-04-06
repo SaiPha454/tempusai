@@ -101,9 +101,9 @@ def _run_seed_statements_from_migrations(project_root: Path) -> None:
 
 
 def run_startup_migrations() -> None:
-    """Run Alembic migrations only for uninitialized databases.
+    """Run Alembic migrations on startup.
 
-    Existing initialized databases are left untouched on app startup.
+    This keeps existing initialized databases up to date when new revisions are added.
     """
     if not settings.run_migrations_on_startup:
         logger.info("Startup migrations disabled by configuration")
@@ -111,18 +111,15 @@ def run_startup_migrations() -> None:
 
     project_root = Path(__file__).resolve().parents[2]
 
-    if _has_applied_alembic_version():
-        if settings.run_seed_on_empty_resources_startup and _needs_resource_seed():
-            logger.info("Initialized DB with empty resources detected; applying seed data")
-            _run_seed_statements_from_migrations(project_root)
-            logger.info("Startup seed data applied")
-        else:
-            logger.info("Database already initialized; skipping startup migrations")
-        return
-
     alembic_ini = project_root / "alembic.ini"
 
-    logger.info("Uninitialized database detected; applying migrations to head")
+    logger.info("Applying migrations to head")
     alembic_cfg = Config(str(alembic_ini))
     command.upgrade(alembic_cfg, "head")
+
+    if settings.run_seed_on_empty_resources_startup and _needs_resource_seed():
+        logger.info("Initialized DB with empty resources detected; applying seed data")
+        _run_seed_statements_from_migrations(project_root)
+        logger.info("Startup seed data applied")
+
     logger.info("Startup migrations completed")
