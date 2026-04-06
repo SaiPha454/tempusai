@@ -12,6 +12,7 @@ class ScheduleClassSnapshot(Base):
     __tablename__ = "schedule_class_snapshots"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_name: Mapped[str] = mapped_column(String(120), nullable=False)
     program_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("programs.id", ondelete="CASCADE"),

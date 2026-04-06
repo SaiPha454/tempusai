@@ -278,6 +278,9 @@ export function GeneratedClassSchedulesPage() {
       ) : schedule ? (
         <div className="space-y-6">
           <p className="text-sm font-medium text-slate-700">{selectedProgramLabel}</p>
+          <p className="text-sm text-slate-700">
+            Job name: <span className="font-semibold text-slate-900">{schedule.job_name || 'N/A'}</span>
+          </p>
           {[1, 2, 3, 4].map((year) => {
             const yearEntries = entriesByYear.get(year) ?? [];
             return (

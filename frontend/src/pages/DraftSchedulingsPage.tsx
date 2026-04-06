@@ -206,7 +206,7 @@ export function DraftSchedulingsPage() {
                 {classDrafts.map((item) => (
                   <tr key={item.id} className="align-top">
                     <td className="border border-slate-200 px-3 py-2">
-                      <p className="font-semibold text-slate-900">Class Draft {item.id.slice(0, 8)}</p>
+                      <p className="font-semibold text-slate-900">{item.job_name || `Class Draft ${item.id.slice(0, 8)}`}</p>
                       <p className="mt-0.5 text-xs text-slate-500">ID: {item.id}</p>
                     </td>
                     <td className="border border-slate-200 px-3 py-2 text-slate-700">Class</td>

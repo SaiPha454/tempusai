@@ -7,6 +7,7 @@ from app.schemas.common import ORMModel
 
 
 class ClassScheduleGenerateRequest(BaseModel):
+    job_name: str = Field(min_length=1, max_length=120)
     program_value: str = Field(min_length=1)
     selected_room_names: list[str] = Field(default_factory=list)
     constraints: dict[str, bool] = Field(default_factory=dict)
@@ -28,6 +29,7 @@ class ProgramDraftSummaryRead(BaseModel):
 
 class ClassDraftScheduleSummaryRead(BaseModel):
     id: UUID
+    job_name: str
     program_value: str
     program_label: str
     status: str
@@ -82,6 +84,7 @@ class ConfirmedProfessorOccupancyRead(BaseModel):
 
 class ClassScheduleDraftRead(ORMModel):
     id: UUID
+    job_name: str
     program_id: UUID
     program_value: str
     program_label: str

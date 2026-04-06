@@ -166,6 +166,7 @@ export function SchedulingManagerPage() {
   const { programs, professors, timeslots, rooms, programYearPlans } = useResourcesCatalog();
 
   const [activeTab, setActiveTab] = useState<(typeof schedulingTabs)[number]>('Schedule Class');
+  const [classJobName, setClassJobName] = useState('');
   const [selectedStudyProgram, setSelectedStudyProgram] = useState('');
   const [roomSearch, setRoomSearch] = useState('');
   const [selectedRooms, setSelectedRooms] = useState<string[]>([]);
@@ -837,13 +838,14 @@ export function SchedulingManagerPage() {
   );
 
   const handleGenerateClassSchedule = async () => {
-    if (!selectedStudyProgram || selectedProgramCourseCount === 0) {
+    if (!classJobName.trim() || !selectedStudyProgram || selectedProgramCourseCount === 0) {
       return;
     }
 
     try {
       setIsGeneratingClassSchedule(true);
       const result = await generateClassSchedule({
+        job_name: classJobName.trim(),
         program_value: selectedStudyProgram,
         selected_room_names: selectedRooms,
         preferred_timeslot_by_course_id: preferredTimeslotByCourseId,
@@ -962,6 +964,8 @@ export function SchedulingManagerPage() {
 
       {activeTab === 'Schedule Class' && (
         <ScheduleClassTab
+          classJobName={classJobName}
+          setClassJobName={setClassJobName}
           selectedStudyProgram={selectedStudyProgram}
           setSelectedStudyProgram={setSelectedStudyProgram}
           studyProgramOptions={studyProgramOptionsWithCounts}

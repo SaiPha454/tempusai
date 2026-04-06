@@ -4,6 +4,7 @@ const classBasePath = '/scheduling/class';
 const examBasePath = '/scheduling/exam';
 
 export type ClassScheduleGeneratePayload = {
+  job_name: string;
   program_value: string;
   selected_room_names: string[];
   constraints?: Record<string, boolean>;
@@ -25,6 +26,7 @@ export type ProgramDraftSummaryDto = {
 
 export type ClassDraftScheduleSummaryDto = {
   id: string;
+  job_name: string;
   program_value: string;
   program_label: string;
   status: string;
@@ -79,6 +81,7 @@ export type ConfirmedProfessorOccupancyDto = {
 
 export type ClassScheduleDraftDto = {
   id: string;
+  job_name: string;
   program_id: string;
   program_value: string;
   program_label: string;

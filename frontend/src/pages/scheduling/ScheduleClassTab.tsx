@@ -29,6 +29,8 @@ type ProgramYearPlan = {
 };
 
 type ScheduleClassTabProps = {
+  classJobName: string;
+  setClassJobName: React.Dispatch<React.SetStateAction<string>>;
   selectedStudyProgram: string;
   setSelectedStudyProgram: (value: string) => void;
   studyProgramOptions: SelectOption[];
@@ -50,6 +52,8 @@ type ScheduleClassTabProps = {
 };
 
 export function ScheduleClassTab({
+  classJobName,
+  setClassJobName,
   selectedStudyProgram,
   setSelectedStudyProgram,
   studyProgramOptions,
@@ -177,6 +181,23 @@ export function ScheduleClassTab({
 
   return (
     <div className="mt-6 space-y-6 pb-8">
+      <Card title="Scheduling Job Name">
+        <div className="max-w-md">
+          <label className="block text-sm text-slate-700">
+            Job name
+            <input
+              type="text"
+              value={classJobName}
+              onChange={(event) => setClassJobName(event.target.value)}
+              maxLength={120}
+              placeholder="e.g. CS Year Plan Draft A"
+              className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+              required
+            />
+          </label>
+        </div>
+      </Card>
+
       <Card title="Study Program">
         <div className="max-w-md">
           <SelectField
@@ -333,7 +354,12 @@ export function ScheduleClassTab({
             <button
               type="button"
               onClick={onGenerate}
-              disabled={isGenerating || selectedRooms.length === 0 || selectedProgramCourseCount === 0}
+              disabled={
+                isGenerating ||
+                classJobName.trim().length === 0 ||
+                selectedRooms.length === 0 ||
+                selectedProgramCourseCount === 0
+              }
               className="rounded-xl bg-[#0A64BC] px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0959A8] active:bg-[#074B8C] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:hover:bg-slate-300"
             >
               {isGenerating ? 'Generating...' : 'Generate Schedule'}

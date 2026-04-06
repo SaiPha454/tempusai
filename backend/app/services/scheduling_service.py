@@ -53,6 +53,10 @@ class SchedulingService:
         self.db = db
 
     def create_class_generation_job(self, payload: ClassScheduleGenerateRequest) -> ClassScheduleJobRead:
+        cleaned_job_name = payload.job_name.strip()
+        if not cleaned_job_name:
+            raise bad_request("Scheduling job name is required")
+
         program = self.db.scalar(select(Program).where(Program.value == payload.program_value.strip()))
         if not program:
             raise bad_request("Program does not exist")
@@ -156,6 +160,7 @@ class SchedulingService:
         room_by_id = {room.id: room for room in rooms}
 
         snapshot = ScheduleClassSnapshot(
+            job_name=cleaned_job_name,
             program_id=program.id,
             status="draft",
             constraints=payload.constraints,
@@ -250,6 +255,7 @@ class SchedulingService:
         return [
             ClassDraftScheduleSummaryRead(
                 id=snapshot.id,
+                job_name=snapshot.job_name,
                 program_value=snapshot.program.value,
                 program_label=snapshot.program.label,
                 status=snapshot.status,
@@ -326,6 +332,7 @@ class SchedulingService:
 
         return ClassScheduleDraftRead(
             id=snapshot.id,
+            job_name=snapshot.job_name,
             program_id=snapshot.program_id,
             program_value=snapshot.program.value,
             program_label=snapshot.program.label,

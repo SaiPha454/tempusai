@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { AxiosError } from 'axios';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Card } from '../components/Card';
 import { Tabs } from '../components/Tabs';
@@ -202,6 +203,11 @@ const readPreferredTimeslotsByKey = (snapshotId: string | null): Record<string, 
     return {};
   }
 };
+
+function readErrorMessage(error: unknown, fallback: string): string {
+  const axiosError = error as AxiosError<{ detail?: string }>;
+  return axiosError.response?.data?.detail ?? fallback;
+}
 
 export function ScheduleDraftPage() {
   const navigate = useNavigate();
@@ -816,8 +822,8 @@ export function ScheduleDraftPage() {
       setLocalEntries(savedDraft.entries);
       setErrorMessage(null);
       window.alert('Staging drafts saved successfully.');
-    } catch {
-      setErrorMessage('Failed to save staging draft. Please try again.');
+    } catch (error) {
+      setErrorMessage(readErrorMessage(error, 'Failed to save staging draft. Please try again.'));
     } finally {
       setSaving(false);
     }
@@ -851,8 +857,8 @@ export function ScheduleDraftPage() {
       setLocalEntries(savedDraft.entries);
       setErrorMessage(null);
       navigate('/generated-class-schedules');
-    } catch {
-      setErrorMessage('Failed to commit schedule. Resolve remaining conflicts and try again.');
+    } catch (error) {
+      setErrorMessage(readErrorMessage(error, 'Failed to commit schedule. Resolve remaining conflicts and try again.'));
     } finally {
       setCommitting(false);
     }
@@ -870,8 +876,8 @@ export function ScheduleDraftPage() {
       setLocalEntries(updated.entries);
       setErrorMessage(null);
       window.alert('Schedule was converted to draft successfully.');
-    } catch {
-      setErrorMessage('Failed to convert schedule to draft. Please try again.');
+    } catch (error) {
+      setErrorMessage(readErrorMessage(error, 'Failed to convert schedule to draft. Please try again.'));
     } finally {
       setConvertingToDraft(false);
     }
@@ -891,8 +897,8 @@ export function ScheduleDraftPage() {
       setDeleting(true);
       await deleteClassScheduleDraft(snapshotId);
       navigate('/scheduling-manager');
-    } catch {
-      setErrorMessage('Failed to delete draft. Please try again.');
+    } catch (error) {
+      setErrorMessage(readErrorMessage(error, 'Failed to delete draft. Please try again.'));
     } finally {
       setDeleting(false);
     }
@@ -1075,6 +1081,9 @@ export function ScheduleDraftPage() {
           <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Class Scheduling Draft</h1>
           <p className="mt-1 text-sm text-slate-600">
             {draft.program_label} · {totalEntriesCount} courses in this draft
+          </p>
+          <p className="mt-1 text-sm font-medium text-slate-700">
+            Job name: {draft.job_name || 'N/A'}
           </p>
         </div>
         <div className="flex items-center gap-2">
