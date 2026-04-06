@@ -10,6 +10,7 @@ import {
   getLatestConfirmedClassSchedule,
   listClassDraftSummary,
   listConfirmedClassScheduleSummary,
+  listExamDraftScheduleSummary,
   listConfirmedExamScheduleSummary,
   type ScheduleClassEntryDto,
 } from '../api/scheduling';
@@ -178,7 +179,8 @@ export function SchedulingManagerPage() {
   const [examGenerationStatus, setExamGenerationStatus] = useState<string | null>(null);
   const [draftCountByProgram, setDraftCountByProgram] = useState<Record<string, number>>({});
   const [confirmedCountByProgram, setConfirmedCountByProgram] = useState<Record<string, number>>({});
-  const [confirmedExamProgramValues, setConfirmedExamProgramValues] = useState<string[]>([]);
+  const [examDraftCountByProgram, setExamDraftCountByProgram] = useState<Record<string, number>>({});
+  const [examConfirmedCountByProgram, setExamConfirmedCountByProgram] = useState<Record<string, number>>({});
 
   const [examFilters, setExamFilters] = useState<ExamFilterForm>(initialExamFilters);
   const [examProgramPlans, setExamProgramPlans] = useState<ExamProgramPlan[]>([]);
@@ -282,17 +284,6 @@ export function SchedulingManagerPage() {
         }>;
       }
 
-      if (confirmedExamProgramValues.includes(examFilters.studyProgram)) {
-        return [] as Array<{
-          id: string;
-          code: string;
-          name: string;
-          year: string;
-          defaultPreferredWeekdays: number[];
-          defaultPreferredDateValues: string[];
-        }>;
-      }
-
       const classEntries = confirmedClassEntriesByProgram[examFilters.studyProgram] ?? [];
       const dedup = new Map<
         string,
@@ -341,17 +332,26 @@ export function SchedulingManagerPage() {
         };
       });
     },
-    [confirmedClassEntriesByProgram, confirmedExamProgramValues, examFilters.studyProgram, globalExamDates],
+    [confirmedClassEntriesByProgram, examFilters.studyProgram, globalExamDates],
   );
 
-  const confirmedExamProgramValueSet = useMemo(() => new Set(confirmedExamProgramValues), [confirmedExamProgramValues]);
+  const confirmedExamProgramValueSet = useMemo(() => {
+    const values = Object.entries(examConfirmedCountByProgram)
+      .filter(([, count]) => count > 0)
+      .map(([value]) => value);
+    return new Set(values);
+  }, [examConfirmedCountByProgram]);
+
+  const selectedExamProgramStatusGroup = useMemo<null | 'confirmed' | 'non-confirmed'>(() => {
+    if (examProgramPlans.length === 0) {
+      return null;
+    }
+    const firstProgram = examProgramPlans[0];
+    return confirmedExamProgramValueSet.has(firstProgram.studyProgram) ? 'confirmed' : 'non-confirmed';
+  }, [confirmedExamProgramValueSet, examProgramPlans]);
 
   const examStudyProgramOptions = useMemo(() => {
-    const unscheduledOptions = studyProgramOptions.filter(
-      (option) => !option.value || !confirmedExamProgramValueSet.has(option.value),
-    );
-
-    return unscheduledOptions.map((option) => {
+    return studyProgramOptions.map((option) => {
       if (!option.value) {
         return option;
       }
@@ -368,12 +368,24 @@ export function SchedulingManagerPage() {
         return true;
       });
 
+      const draftCount = examDraftCountByProgram[option.value] ?? 0;
+      const confirmedCount = examConfirmedCountByProgram[option.value] ?? 0;
+      const statusTokens: string[] = [];
+      if (draftCount > 0) {
+        statusTokens.push(`${draftCount} draft${draftCount > 1 ? 's' : ''}`);
+      }
+      if (confirmedCount > 0) {
+        statusTokens.push(`${confirmedCount} schedule${confirmedCount > 1 ? 's' : ''}`);
+      }
+
+      const withStatusLabel = statusTokens.length > 0 ? `${option.label} (${statusTokens.join(', ')})` : option.label;
+
       return {
         ...option,
-        label: isSelected ? `✓ ${option.label}` : option.label,
+        label: isSelected ? `✓ ${withStatusLabel}` : withStatusLabel,
       };
     });
-  }, [confirmedExamProgramValueSet, examFilters.examType, examFilters.semester, examProgramPlans, studyProgramOptions]);
+  }, [examConfirmedCountByProgram, examDraftCountByProgram, examFilters.examType, examFilters.semester, examProgramPlans, studyProgramOptions]);
 
   const filteredGlobalExamRooms = useMemo(() => {
     const normalized = globalExamRoomSearch.trim().toLowerCase();
@@ -400,9 +412,10 @@ export function SchedulingManagerPage() {
 
     const loadDraftSummary = async () => {
       try {
-        const [draftSummary, confirmedSummary, confirmedExamSummary] = await Promise.all([
+        const [draftSummary, confirmedSummary, examDraftSummary, confirmedExamSummary] = await Promise.all([
           listClassDraftSummary(),
           listConfirmedClassScheduleSummary(),
+          listExamDraftScheduleSummary(),
           listConfirmedExamScheduleSummary(),
         ]);
         if (cancelled) {
@@ -419,13 +432,24 @@ export function SchedulingManagerPage() {
           nextConfirmedMap[item.program_value] = item.confirmed_count;
         }
 
-        const nextConfirmedExamPrograms = Array.from(
-          new Set(confirmedExamSummary.flatMap((item) => item.program_values)),
-        );
+        const nextExamDraftMap: Record<string, number> = {};
+        for (const draft of examDraftSummary) {
+          for (const programValue of draft.program_values) {
+            nextExamDraftMap[programValue] = (nextExamDraftMap[programValue] ?? 0) + 1;
+          }
+        }
+
+        const nextExamConfirmedMap: Record<string, number> = {};
+        for (const confirmed of confirmedExamSummary) {
+          for (const programValue of confirmed.program_values) {
+            nextExamConfirmedMap[programValue] = (nextExamConfirmedMap[programValue] ?? 0) + 1;
+          }
+        }
 
         setDraftCountByProgram(nextDraftMap);
         setConfirmedCountByProgram(nextConfirmedMap);
-        setConfirmedExamProgramValues(nextConfirmedExamPrograms);
+        setExamDraftCountByProgram(nextExamDraftMap);
+        setExamConfirmedCountByProgram(nextExamConfirmedMap);
       } catch (error) {
         if (!cancelled) {
           console.error('Failed to load schedule summary', error);
@@ -439,21 +463,6 @@ export function SchedulingManagerPage() {
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    if (!examFilters.studyProgram) {
-      return;
-    }
-
-    if (!confirmedExamProgramValueSet.has(examFilters.studyProgram)) {
-      return;
-    }
-
-    setExamFilters((prev) => ({
-      ...prev,
-      studyProgram: '',
-    }));
-  }, [confirmedExamProgramValueSet, examFilters.studyProgram]);
 
   useEffect(() => {
     let cancelled = false;
@@ -510,9 +519,12 @@ export function SchedulingManagerPage() {
 
   const canAddExamProgram =
     Boolean(examFilters.studyProgram) &&
-    !confirmedExamProgramValueSet.has(examFilters.studyProgram) &&
     Boolean(examFilters.semester) &&
     Boolean(examFilters.examType) &&
+    (selectedExamProgramStatusGroup === null ||
+      (selectedExamProgramStatusGroup === 'confirmed'
+        ? confirmedExamProgramValueSet.has(examFilters.studyProgram)
+        : !confirmedExamProgramValueSet.has(examFilters.studyProgram))) &&
     filteredExamCatalogSubjects.length > 0;
 
   const addExamProgramPlan = () => {
@@ -520,8 +532,13 @@ export function SchedulingManagerPage() {
       return;
     }
 
-    if (confirmedExamProgramValueSet.has(examFilters.studyProgram)) {
-      setExamGenerationError('This program already has a confirmed exam schedule. Please edit it from Generated Exam Schedules.');
+    const nextProgramIsConfirmed = confirmedExamProgramValueSet.has(examFilters.studyProgram);
+    if (selectedExamProgramStatusGroup === 'confirmed' && !nextProgramIsConfirmed) {
+      setExamGenerationError('Cannot mix confirmed-schedule programs with non-confirmed programs in one exam generation batch.');
+      return;
+    }
+    if (selectedExamProgramStatusGroup === 'non-confirmed' && nextProgramIsConfirmed) {
+      setExamGenerationError('Cannot mix confirmed-schedule programs with non-confirmed programs in one exam generation batch.');
       return;
     }
 

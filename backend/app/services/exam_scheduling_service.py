@@ -92,12 +92,12 @@ class ExamSchedulingService:
             for plan in payload.program_plans
             if plan.program_value and plan.program_value.strip()
         }
-        confirmed_programs = self._list_confirmed_programs(requested_program_values)
-        if confirmed_programs:
-            labels = ", ".join(label or value for value, label in confirmed_programs)
+        confirmed_program_value_set = {value for value, _ in self._list_confirmed_programs(requested_program_values)}
+        has_confirmed_program = any(program_value in confirmed_program_value_set for program_value in requested_program_values)
+        has_non_confirmed_program = any(program_value not in confirmed_program_value_set for program_value in requested_program_values)
+        if has_confirmed_program and has_non_confirmed_program:
             raise bad_request(
-                "These programs already have confirmed exam schedules: "
-                f"{labels}. Please edit them from Generated Exam Schedules."
+                "Cannot mix programs with confirmed schedules and programs without confirmed schedules in the same exam generation job."
             )
 
         exam_dates = self._parse_exam_dates(payload.exam_dates)
@@ -346,6 +346,22 @@ class ExamSchedulingService:
         if any(any(code in blocking_codes for code in codes) for codes in conflicts.values()):
             raise bad_request("Cannot save exam schedule while conflicts still exist")
 
+        snapshot_program_values = set(snapshot.program_values)
+        existing_confirmed_snapshots = list(
+            self.db.scalars(
+                select(ScheduleExamSnapshot)
+                .where(ScheduleExamSnapshot.status == "confirmed")
+                .where(ScheduleExamSnapshot.id != snapshot.id)
+            )
+        )
+
+        for confirmed_snapshot in existing_confirmed_snapshots:
+            if snapshot_program_values.intersection(set(confirmed_snapshot.program_values)):
+                raise bad_request(
+                    "One or more programs in this draft already have a committed exam schedule. "
+                    "Delete existing committed schedules or convert them to draft before committing."
+                )
+
         snapshot.status = "confirmed"
         self.db.commit()
 
@@ -356,6 +372,47 @@ class ExamSchedulingService:
         if not snapshot:
             raise not_found("Exam draft snapshot")
         self.db.delete(snapshot)
+        self.db.commit()
+
+    def make_exam_schedule_as_draft(self, snapshot_id: UUID) -> ExamScheduleDraftRead:
+        snapshot = self._get_exam_snapshot(snapshot_id)
+        if snapshot.status != "draft":
+            snapshot.status = "draft"
+            self.db.commit()
+        return self.get_exam_draft(snapshot.id)
+
+    def delete_exam_schedule_program(self, snapshot_id: UUID, program_value: str) -> None:
+        snapshot = self._get_exam_snapshot(snapshot_id)
+        target_program_value = program_value.strip()
+        if not target_program_value:
+            raise bad_request("Program value is required")
+
+        target_program = self.db.scalar(select(Program).where(Program.value == target_program_value))
+        if not target_program:
+            raise bad_request("Program does not exist")
+
+        entries_to_delete = [entry for entry in snapshot.entries if entry.program_id == target_program.id]
+        if not entries_to_delete:
+            raise not_found("Program schedule entries")
+
+        for entry in entries_to_delete:
+            self.db.delete(entry)
+
+        remaining_entries = [entry for entry in snapshot.entries if entry.program_id != target_program.id]
+        if not remaining_entries:
+            self.db.delete(snapshot)
+            self.db.commit()
+            return
+
+        remaining_program_ids = {entry.program_id for entry in remaining_entries}
+        remaining_program_values = list(
+            self.db.scalars(
+                select(Program.value)
+                .where(Program.id.in_(remaining_program_ids))
+                .order_by(Program.value)
+            )
+        )
+        snapshot.program_values = remaining_program_values
         self.db.commit()
 
     def list_draft_exam_summaries(self) -> list[ExamDraftScheduleSummaryRead]:

@@ -11,10 +11,12 @@ import {
 } from '../utils/programColorTheme';
 import {
   commitExamScheduleDraft,
+  deleteExamScheduleProgram,
   deleteExamScheduleDraft,
   getExamScheduleDraft,
   getExamScheduleJob,
   getLatestConfirmedClassSchedule,
+  makeExamScheduleAsDraft,
   saveExamScheduleDraft,
   type ExamScheduleDraftDto,
   type ScheduleConflictDto,
@@ -152,6 +154,8 @@ export function ExamScheduleDraftPage() {
   const [searchParams] = useSearchParams();
   const snapshotId = searchParams.get('snapshotId');
   const jobId = searchParams.get('jobId');
+  const scopedProgramValue = searchParams.get('programValue')?.trim() ?? '';
+  const isScopedProgramMode = Boolean(scopedProgramValue);
 
   const [rooms, setRooms] = useState<RoomDto[]>([]);
   const [draft, setDraft] = useState<ExamScheduleDraftDto | null>(null);
@@ -162,6 +166,7 @@ export function ExamScheduleDraftPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [committing, setCommitting] = useState(false);
+  const [convertingToDraft, setConvertingToDraft] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [preferredWeekdaysByProgramYearCourseKey, setPreferredWeekdaysByProgramYearCourseKey] = useState<
@@ -172,6 +177,7 @@ export function ExamScheduleDraftPage() {
   const [programFilter, setProgramFilter] = useState('');
   const [yearFilter, setYearFilter] = useState('');
   const [activeDay, setActiveDay] = useState<string | null>(null);
+  const effectiveProgramFilter = isScopedProgramMode ? scopedProgramValue : programFilter;
   const dragAreaRef = useRef<HTMLDivElement | null>(null);
   const dragPointerYRef = useRef<number | null>(null);
   const dragAutoScrollFrameRef = useRef<number | null>(null);
@@ -329,6 +335,12 @@ export function ExamScheduleDraftPage() {
     }
   }, [activeDay, sortedExamDates]);
 
+  useEffect(() => {
+    if (isScopedProgramMode) {
+      setProgramFilter(scopedProgramValue);
+    }
+  }, [isScopedProgramMode, scopedProgramValue]);
+
   const selectedRooms = useMemo(() => {
     if (!draft) {
       return [] as RoomDto[];
@@ -430,7 +442,7 @@ export function ExamScheduleDraftPage() {
 
   const filteredEntries = useMemo(() => {
     return entriesWithRecomputedConflicts.filter((entry) => {
-      if (programFilter && entry.program_value !== programFilter) {
+      if (effectiveProgramFilter && entry.program_value !== effectiveProgramFilter) {
         return false;
       }
       if (yearFilter && String(entry.year) !== yearFilter) {
@@ -438,12 +450,12 @@ export function ExamScheduleDraftPage() {
       }
       return true;
     });
-  }, [entriesWithRecomputedConflicts, programFilter, yearFilter]);
+  }, [effectiveProgramFilter, entriesWithRecomputedConflicts, yearFilter]);
 
   const hiddenOtherProgramOccupancyByCell = useMemo(() => {
     const map = new Map<string, number>();
 
-    if (!programFilter) {
+    if (!effectiveProgramFilter) {
       return map;
     }
 
@@ -451,7 +463,7 @@ export function ExamScheduleDraftPage() {
       if (!entry.exam_date || !entry.timeslot_code || !entry.room_id) {
         continue;
       }
-      if (entry.program_value === programFilter) {
+      if (entry.program_value === effectiveProgramFilter) {
         continue;
       }
 
@@ -460,18 +472,26 @@ export function ExamScheduleDraftPage() {
     }
 
     return map;
-  }, [entriesWithRecomputedConflicts, programFilter]);
+  }, [effectiveProgramFilter, entriesWithRecomputedConflicts]);
 
   const unassignedEntries = useMemo(
-    () => entriesWithRecomputedConflicts.filter((entry) => !entry.exam_date || !entry.timeslot_code || !entry.room_id),
-    [entriesWithRecomputedConflicts],
+    () =>
+      entriesWithRecomputedConflicts.filter(
+        (entry) =>
+          (!effectiveProgramFilter || entry.program_value === effectiveProgramFilter) &&
+          (!entry.exam_date || !entry.timeslot_code || !entry.room_id),
+      ),
+    [effectiveProgramFilter, entriesWithRecomputedConflicts],
   );
 
   const unassignedEntriesCount = unassignedEntries.length;
 
   const conflictCount = useMemo(
-    () => entriesWithRecomputedConflicts.filter((entry) => entry.conflicts.length > 0).length,
-    [entriesWithRecomputedConflicts],
+    () =>
+      entriesWithRecomputedConflicts.filter(
+        (entry) => (!effectiveProgramFilter || entry.program_value === effectiveProgramFilter) && entry.conflicts.length > 0,
+      ).length,
+    [effectiveProgramFilter, entriesWithRecomputedConflicts],
   );
 
   const hasUnsavedChanges = useMemo(() => {
@@ -514,13 +534,16 @@ export function ExamScheduleDraftPage() {
   const conflictSummary = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const entry of entriesWithRecomputedConflicts) {
+      if (effectiveProgramFilter && entry.program_value !== effectiveProgramFilter) {
+        continue;
+      }
       const uniqueCodes = new Set(entry.conflicts.map((conflict) => conflict.code));
       for (const code of uniqueCodes) {
         counts[code] = (counts[code] ?? 0) + 1;
       }
     }
     return counts;
-  }, [entriesWithRecomputedConflicts]);
+  }, [effectiveProgramFilter, entriesWithRecomputedConflicts]);
 
   const programOptions = useMemo(
     () =>
@@ -531,8 +554,8 @@ export function ExamScheduleDraftPage() {
   );
 
   const programYearFilterValue = useMemo(
-    () => programFilter || programOptions[0]?.value || '',
-    [programFilter, programOptions],
+    () => (isScopedProgramMode ? scopedProgramValue : effectiveProgramFilter || programOptions[0]?.value || ''),
+    [effectiveProgramFilter, isScopedProgramMode, programOptions, scopedProgramValue],
   );
 
   const selectedProgramEntries = useMemo(
@@ -902,20 +925,48 @@ export function ExamScheduleDraftPage() {
     }
   };
 
+  const handleMakeAsDraft = async () => {
+    if (!snapshotId) {
+      return;
+    }
+
+    try {
+      setConvertingToDraft(true);
+      const updated = await makeExamScheduleAsDraft(snapshotId);
+      setDraft(updated);
+      setLocalEntries(updated.entries);
+      setErrorMessage(null);
+      window.alert('Schedule was converted to draft successfully.');
+    } catch (error) {
+      setErrorMessage(readErrorMessage(error, 'Failed to convert schedule to draft. Please try again.'));
+    } finally {
+      setConvertingToDraft(false);
+    }
+  };
+
   const handleDeleteDraft = async () => {
     if (!snapshotId) {
       return;
     }
 
-    const confirmed = window.confirm('Delete this exam draft?');
+    const confirmed = window.confirm(
+      isScopedProgramMode
+        ? `Delete exam schedule for ${scopedProgramValue} from this snapshot?`
+        : 'Delete this exam draft?',
+    );
     if (!confirmed) {
       return;
     }
 
     try {
       setDeleting(true);
-      await deleteExamScheduleDraft(snapshotId);
-      navigate('/scheduling-manager');
+      if (isScopedProgramMode) {
+        await deleteExamScheduleProgram(snapshotId, scopedProgramValue);
+        navigate('/generated-exam-schedules');
+      } else {
+        await deleteExamScheduleDraft(snapshotId);
+        navigate('/scheduling-manager');
+      }
     } catch (error) {
       setErrorMessage(readErrorMessage(error, 'Failed to delete exam draft.'));
     } finally {
@@ -1151,7 +1202,10 @@ export function ExamScheduleDraftPage() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Exam Scheduling Draft</h1>
           <p className="mt-1 text-sm text-slate-600">
-            {draft.program_values.join(', ')} · {entriesWithRecomputedConflicts.length} exams in this draft
+            {(isScopedProgramMode ? scopedProgramValue : draft.program_values.join(', ')) || 'N/A'} ·{' '}
+            {(isScopedProgramMode
+              ? entriesWithRecomputedConflicts.filter((entry) => entry.program_value === scopedProgramValue).length
+              : entriesWithRecomputedConflicts.length)} exams in this draft
           </p>
           <p className="mt-1 text-sm font-medium text-slate-700">
             Job name: {draft.job_name ?? `Exam Draft ${draft.id.slice(0, 8)}`}
@@ -1161,19 +1215,30 @@ export function ExamScheduleDraftPage() {
           <button
             type="button"
             onClick={handleDeleteDraft}
-            disabled={deleting || saving || committing}
+            disabled={deleting || saving || committing || convertingToDraft}
             className="rounded-lg border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
           >
             {deleting ? 'Deleting...' : 'Delete Draft/Schedule'}
           </button>
-          <button
-            type="button"
-            onClick={handleSaveDraft}
-            disabled={saving || deleting || committing || !hasUnsavedChanges}
-            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
-          >
-            {saving ? 'Saving...' : 'Save Staging Drafts'}
-          </button>
+          {draft.status === 'draft' ? (
+            <button
+              type="button"
+              onClick={handleSaveDraft}
+              disabled={saving || deleting || committing || convertingToDraft || !hasUnsavedChanges}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+            >
+              {saving ? 'Saving...' : 'Save Staging Drafts'}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleMakeAsDraft}
+              disabled={saving || deleting || committing || convertingToDraft}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+            >
+              {convertingToDraft ? 'Converting...' : 'Make as Draft'}
+            </button>
+          )}
           <button
             type="button"
             onClick={handleCommitSchedule}
@@ -1181,6 +1246,7 @@ export function ExamScheduleDraftPage() {
               saving ||
               deleting ||
               committing ||
+              convertingToDraft ||
               unassignedEntriesCount > 0 ||
               conflictCount > 0 ||
               (draft?.status === 'confirmed' && !hasUnsavedChanges)
@@ -1239,9 +1305,10 @@ export function ExamScheduleDraftPage() {
             <select
               value={programFilter}
               onChange={(event) => setProgramFilter(event.target.value)}
+              disabled={isScopedProgramMode}
               className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
             >
-              <option value="">All programs</option>
+              {!isScopedProgramMode && <option value="">All programs</option>}
               {programOptions.map((program) => (
                 <option key={program.value} value={program.value}>
                   {program.label}
@@ -1364,7 +1431,9 @@ export function ExamScheduleDraftPage() {
                                 }
                                 onDropToRoomCell(activeDay, slot.value, room.id);
                               }}
-                              className={`min-h-[170px] border-r border-b border-slate-200 bg-white p-2 last:border-r-0 ${
+                              className={`min-h-[170px] border-r border-b border-slate-200 p-2 last:border-r-0 ${
+                                confirmedBlocking ? 'bg-rose-50' : 'bg-white'
+                              } ${
                                 hoveredCellKey === cellKey
                                   ? 'bg-sky-50 ring-1 ring-inset ring-sky-300'
                                   : isValidPlacementTarget
@@ -1381,8 +1450,8 @@ export function ExamScheduleDraftPage() {
                                 </div>
                               )}
                               {confirmedBlocking && (
-                                <div className="mb-1 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700">
-                                  Confirmed: {confirmedBlocking.courseCode}
+                                <div className="mb-1 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-600">
+                                  Already used by {confirmedBlocking.courseCode} ({confirmedBlocking.courseName})
                                 </div>
                               )}
                               <div className="space-y-2">

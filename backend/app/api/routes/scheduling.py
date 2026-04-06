@@ -244,3 +244,24 @@ def commit_exam_schedule_draft(
 def delete_exam_schedule_draft(snapshot_id: UUID, db: Session = Depends(db_dependency)) -> Response:
     ExamSchedulingService(db).delete_exam_draft(snapshot_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/exam/schedules/{snapshot_id}/make-draft",
+    response_model=ExamScheduleDraftRead,
+    summary="Convert exam schedule snapshot to draft",
+    tags=["scheduling-exam"],
+)
+def make_exam_schedule_as_draft(snapshot_id: UUID, db: Session = Depends(db_dependency)) -> ExamScheduleDraftRead:
+    return ExamSchedulingService(db).make_exam_schedule_as_draft(snapshot_id)
+
+
+@router.delete(
+    "/exam/schedules/{snapshot_id}/programs/{program_value}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete exam schedule for a program from snapshot",
+    tags=["scheduling-exam"],
+)
+def delete_exam_schedule_program(snapshot_id: UUID, program_value: str, db: Session = Depends(db_dependency)) -> Response:
+    ExamSchedulingService(db).delete_exam_schedule_program(snapshot_id, program_value)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -185,11 +185,9 @@ export function GeneratedExamSchedulesPage() {
                   >
                     {scheduleOptions.map((schedule) => {
                       const scheduleLabel = schedule.job_name?.trim() ? schedule.job_name : `Schedule ${schedule.id.slice(0, 8)}`;
-                      const programsLabel = schedule.program_values.join(', ') || 'No program';
-                      const updatedLabel = new Date(schedule.updated_at).toLocaleDateString();
                       return (
                         <option key={schedule.id} value={schedule.id}>
-                          {`${scheduleLabel} · ${programsLabel} · ${updatedLabel}`}
+                          {scheduleLabel}
                         </option>
                       );
                     })}
@@ -236,7 +234,12 @@ export function GeneratedExamSchedulesPage() {
               <div className="mt-3 flex justify-end">
                 <button
                   type="button"
-                  onClick={() => navigate(`/exam-scheduling-draft?snapshotId=${selectedSchedule.id}&fromGenerated=1`)}
+                  onClick={() =>
+                    navigate(
+                      `/exam-scheduling-draft?snapshotId=${selectedSchedule.id}&programValue=${encodeURIComponent(selectedProgramValue)}&fromGenerated=1`,
+                    )
+                  }
+                  disabled={!selectedProgramValue}
                   className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
                 >
                   Edit
