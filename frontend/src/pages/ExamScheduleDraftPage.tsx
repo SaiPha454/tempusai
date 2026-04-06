@@ -22,6 +22,19 @@ import {
   type ScheduleConflictDto,
   type ScheduleExamEntryDto,
 } from '../api/scheduling';
+import {
+  buildPreferredWeekdayStatusByEntryId,
+  canPlaceExamEntryInRoomCell,
+  getExamRoomAvailabilityStatus,
+  recomputeExamDraftConflicts,
+} from '../services/scheduling';
+import { resolveExamConflictMessage } from '../utils/scheduling/conflictCatalog';
+import {
+  buildCourseYearKey,
+  buildProgramYearCourseKey,
+  normalizeWeekdayToMondayBasedIndex,
+  toPrettyDateLabel,
+} from '../utils/scheduling';
 
 type DraftViewTab = 'Calendar Board' | 'Program Year Board';
 
@@ -40,14 +53,6 @@ const editableSlotOptions = [
   { value: 'afternoon-exam', label: examSlotLabelByCode['afternoon-exam'] },
 ];
 
-const conflictMessageByCode: Record<string, string> = {
-  unassigned: 'Missing exam date, slot, or room assignment.',
-  room_overlap: 'Room has another exam at the same date and slot.',
-  program_year_overlap: 'Same program and year already has an exam at this date and slot.',
-  student_overlap: 'One or more students would have two exams at the same date and slot.',
-  room_capacity_exceeded: 'Room capacity is smaller than expected enrollment.',
-};
-
 const yearCardStyles: Record<number, { border: string; token: string }> = {
   1: {
     border: 'border-l-sky-600',
@@ -65,83 +70,6 @@ const yearCardStyles: Record<number, { border: string; token: string }> = {
     border: 'border-l-indigo-600',
     token: 'border-indigo-300 bg-indigo-100 text-indigo-900',
   },
-};
-
-function toPrettyDateLabel(isoDate: string): string {
-  const parsed = new Date(`${isoDate}T00:00:00`);
-  if (Number.isNaN(parsed.getTime())) {
-    return isoDate;
-  }
-  return parsed.toLocaleDateString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  });
-}
-
-function normalizeWeekdayToMondayBasedIndex(rawDay: string | null): number | null {
-  if (!rawDay) {
-    return null;
-  }
-
-  const value = rawDay.trim().toLowerCase();
-  const dayMap: Record<string, number> = {
-    monday: 0,
-    mon: 0,
-    tuesday: 1,
-    tue: 1,
-    tues: 1,
-    wednesday: 2,
-    wed: 2,
-    thursday: 3,
-    thu: 3,
-    thur: 3,
-    thurs: 3,
-    friday: 4,
-    fri: 4,
-    saturday: 5,
-    sat: 5,
-    sunday: 6,
-    sun: 6,
-  };
-
-  return dayMap[value] ?? null;
-}
-
-function toMondayBasedWeekdayIndexFromIsoDate(isoDate: string | null): number | null {
-  if (!isoDate) {
-    return null;
-  }
-
-  const [year, month, day] = isoDate.split('-').map(Number);
-  if (!year || !month || !day) {
-    return null;
-  }
-
-  const parsed = new Date(year, month - 1, day);
-  if (Number.isNaN(parsed.getTime())) {
-    return null;
-  }
-
-  const sundayBased = parsed.getDay();
-  return (sundayBased + 6) % 7;
-}
-
-function buildProgramYearCourseKey(programValue: string, programYearCourseId: string | null): string | null {
-  if (!programYearCourseId) {
-    return null;
-  }
-  return `${programValue}:${programYearCourseId}`;
-}
-
-function buildCourseYearKey(programValue: string, courseId: string, year: number): string {
-  return `${programValue}:${courseId}:${year}`;
-}
-
-type PreferredWeekdayStatus = {
-  label: string;
-  className: string;
-  title: string;
 };
 
 function readErrorMessage(error: unknown, fallback: string): string {
@@ -382,63 +310,16 @@ export function ExamScheduleDraftPage() {
     return map;
   }, [draft?.entries]);
 
-  const entriesWithRecomputedConflicts = useMemo(() => {
-    const byRoomDateSlot = new Map<string, LocalExamEntry[]>();
-    const byProgramYearSlot = new Map<string, LocalExamEntry[]>();
-
-    for (const entry of localEntries) {
-      if (entry.room_id && entry.exam_date && entry.timeslot_code) {
-        const roomKey = `${entry.room_id}-${entry.exam_date}-${entry.timeslot_code}`;
-        const roomEntries = byRoomDateSlot.get(roomKey) ?? [];
-        roomEntries.push(entry);
-        byRoomDateSlot.set(roomKey, roomEntries);
-
-        const cohortKey = `${entry.program_id}-${entry.year}-${entry.exam_date}-${entry.timeslot_code}`;
-        const cohortEntries = byProgramYearSlot.get(cohortKey) ?? [];
-        cohortEntries.push(entry);
-        byProgramYearSlot.set(cohortKey, cohortEntries);
-      }
-    }
-
-    return localEntries.map((entry) => {
-      const dynamicCodes = new Set<string>();
-      if (!entry.exam_date || !entry.timeslot_code || !entry.room_id) {
-        dynamicCodes.add('unassigned');
-      }
-
-      if (entry.room_id && entry.exam_date && entry.timeslot_code) {
-        const roomKey = `${entry.room_id}-${entry.exam_date}-${entry.timeslot_code}`;
-        if (confirmedOccupancyByRoomDateSlot.has(roomKey)) {
-          dynamicCodes.add('room_overlap');
-        }
-
-        if ((byRoomDateSlot.get(roomKey) ?? []).length > 1) {
-          dynamicCodes.add('room_overlap');
-        }
-
-        if (draft?.constraints.no_same_program_year_day_timeslot !== false) {
-          const cohortKey = `${entry.program_id}-${entry.year}-${entry.exam_date}-${entry.timeslot_code}`;
-          if ((byProgramYearSlot.get(cohortKey) ?? []).length > 1) {
-            dynamicCodes.add('program_year_overlap');
-          }
-        }
-      }
-
-      const baseConflicts = baseConflictsByEntryId.get(entry.id) ?? [];
-      const preserved = baseConflicts.filter(
-        (conflict) => conflict.code === 'student_overlap' || conflict.code === 'room_capacity_exceeded',
-      );
-      const dynamic = Array.from(dynamicCodes).map((code) => ({
-        code,
-        message: conflictMessageByCode[code] ?? 'Conflict detected.',
-      }));
-
-      return {
-        ...entry,
-        conflicts: [...preserved, ...dynamic],
-      };
-    });
-  }, [baseConflictsByEntryId, confirmedOccupancyByRoomDateSlot, draft?.constraints.no_same_program_year_day_timeslot, localEntries]);
+  const entriesWithRecomputedConflicts = useMemo(
+    () =>
+      recomputeExamDraftConflicts({
+        localEntries,
+        baseConflictsByEntryId,
+        confirmedOccupancyByRoomDateSlot,
+        enforceProgramYearNoOverlap: draft?.constraints.no_same_program_year_day_timeslot !== false,
+      }),
+    [baseConflictsByEntryId, confirmedOccupancyByRoomDateSlot, draft?.constraints.no_same_program_year_day_timeslot, localEntries],
+  );
 
   const filteredEntries = useMemo(() => {
     return entriesWithRecomputedConflicts.filter((entry) => {
@@ -568,51 +449,15 @@ export function ExamScheduleDraftPage() {
     [programOptions, programYearFilterValue],
   );
 
-  const preferredWeekdayStatusByEntryId = useMemo(() => {
-    const result = new Map<string, PreferredWeekdayStatus>();
-
-    for (const entry of entriesWithRecomputedConflicts) {
-      const pycKey = buildProgramYearCourseKey(entry.program_value, entry.program_year_course_id);
-      const preferredByPyc = pycKey ? preferredWeekdaysByProgramYearCourseKey[pycKey] ?? [] : [];
-      const fallbackKey = buildCourseYearKey(entry.program_value, entry.course_id, entry.year);
-      const preferredWeekdays = preferredByPyc.length > 0 ? preferredByPyc : preferredWeekdaysByCourseYearKey[fallbackKey] ?? [];
-
-      if (!entry.exam_date) {
-        result.set(entry.id, {
-          label: 'Preferred weekday: pending',
-          className: 'bg-slate-100 text-slate-700',
-          title: 'Exam date is not assigned yet.',
-        });
-        continue;
-      }
-
-      if (preferredWeekdays.length === 0) {
-        result.set(entry.id, {
-          label: 'Preferred weekday: no data',
-          className: 'bg-slate-100 text-slate-700',
-          title: 'No class weekday preference data was found for this subject.',
-        });
-        continue;
-      }
-
-      const assignedWeekday = toMondayBasedWeekdayIndexFromIsoDate(entry.exam_date);
-      if (assignedWeekday !== null && preferredWeekdays.includes(assignedWeekday)) {
-        result.set(entry.id, {
-          label: 'Preferred weekday: matched',
-          className: 'bg-emerald-100 text-emerald-800',
-          title: 'Assigned exam date matches this subject\'s preferred weekday.',
-        });
-      } else {
-        result.set(entry.id, {
-          label: 'Preferred weekday: not matched',
-          className: 'bg-amber-100 text-amber-800',
-          title: 'Assigned exam date does not match this subject\'s preferred weekday.',
-        });
-      }
-    }
-
-    return result;
-  }, [entriesWithRecomputedConflicts, preferredWeekdaysByCourseYearKey, preferredWeekdaysByProgramYearCourseKey]);
+  const preferredWeekdayStatusByEntryId = useMemo(
+    () =>
+      buildPreferredWeekdayStatusByEntryId({
+        entries: entriesWithRecomputedConflicts,
+        preferredWeekdaysByProgramYearCourseKey,
+        preferredWeekdaysByCourseYearKey,
+      }),
+    [entriesWithRecomputedConflicts, preferredWeekdaysByCourseYearKey, preferredWeekdaysByProgramYearCourseKey],
+  );
 
   const programStylesByValue = useMemo(() => {
     const values = localEntries.map((entry) => getProgramColorKey(entry));
@@ -639,72 +484,29 @@ export function ExamScheduleDraftPage() {
     );
   };
 
-  const getRoomAvailabilityStatus = (
-    entry: LocalExamEntry,
-    roomId: string,
-  ): 'available' | 'used_draft' | 'used_confirmed' => {
-    if (!entry.exam_date || !entry.timeslot_code) {
-      return 'available';
-    }
-
-    const occupancyKey = `${roomId}-${entry.exam_date}-${entry.timeslot_code}`;
-    if (confirmedOccupancyByRoomDateSlot.has(occupancyKey)) {
-      return 'used_confirmed';
-    }
-
-    const usedInDraft = entriesWithRecomputedConflicts.some(
-      (candidate) =>
-        candidate.id !== entry.id &&
-        candidate.exam_date === entry.exam_date &&
-        candidate.timeslot_code === entry.timeslot_code &&
-        candidate.room_id === roomId,
-    );
-
-    if (usedInDraft) {
-      return 'used_draft';
-    }
-
-    return 'available';
-  };
+  const getRoomAvailabilityStatus = (entry: LocalExamEntry, roomId: string): 'available' | 'used_draft' | 'used_confirmed' =>
+    getExamRoomAvailabilityStatus({
+      entry,
+      roomId,
+      localEntries: entriesWithRecomputedConflicts,
+      confirmedOccupancyByRoomDateSlot,
+    });
 
   const canPlaceEntryInRoomCell = (
     entry: LocalExamEntry,
     examDate: string,
     slotCode: string,
     roomId: string,
-  ): boolean => {
-    const roomKey = `${roomId}-${examDate}-${slotCode}`;
-    if (confirmedOccupancyByRoomDateSlot.has(roomKey)) {
-      return false;
-    }
-
-    const occupiedInDraft = entriesWithRecomputedConflicts.some(
-      (candidate) =>
-        candidate.id !== entry.id &&
-        candidate.room_id === roomId &&
-        candidate.exam_date === examDate &&
-        candidate.timeslot_code === slotCode,
-    );
-    if (occupiedInDraft) {
-      return false;
-    }
-
-    if (draft?.constraints.no_same_program_year_day_timeslot !== false) {
-      const sameCohortConflict = entriesWithRecomputedConflicts.some(
-        (candidate) =>
-          candidate.id !== entry.id &&
-          candidate.program_id === entry.program_id &&
-          candidate.year === entry.year &&
-          candidate.exam_date === examDate &&
-          candidate.timeslot_code === slotCode,
-      );
-      if (sameCohortConflict) {
-        return false;
-      }
-    }
-
-    return true;
-  };
+  ): boolean =>
+    canPlaceExamEntryInRoomCell({
+      entry,
+      examDate,
+      slotCode,
+      roomId,
+      localEntries: entriesWithRecomputedConflicts,
+      confirmedOccupancyByRoomDateSlot,
+      enforceProgramYearNoOverlap: draft?.constraints.no_same_program_year_day_timeslot !== false,
+    });
 
   const stopDragAutoScroll = () => {
     if (dragAutoScrollFrameRef.current !== null) {
@@ -932,10 +734,24 @@ export function ExamScheduleDraftPage() {
 
     try {
       setConvertingToDraft(true);
-      const updated = await makeExamScheduleAsDraft(snapshotId);
+      const updated = await makeExamScheduleAsDraft(
+        snapshotId,
+        isScopedProgramMode ? scopedProgramValue : undefined,
+      );
       setDraft(updated);
       setLocalEntries(updated.entries);
       setErrorMessage(null);
+
+      if (updated.id !== snapshotId) {
+        const nextParams = new URLSearchParams();
+        nextParams.set('snapshotId', updated.id);
+        if (isScopedProgramMode) {
+          nextParams.set('programValue', scopedProgramValue);
+          nextParams.set('fromGenerated', '1');
+        }
+        navigate(`/exam-scheduling-draft?${nextParams.toString()}`, { replace: true });
+      }
+
       window.alert('Schedule was converted to draft successfully.');
     } catch (error) {
       setErrorMessage(readErrorMessage(error, 'Failed to convert schedule to draft. Please try again.'));
@@ -1159,7 +975,7 @@ export function ExamScheduleDraftPage() {
               <span
                 key={`${entry.id}-${conflict.code}`}
                 className="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-medium text-rose-700"
-                title={conflict.message ?? conflictMessageByCode[conflict.code] ?? 'Conflict detected'}
+                title={conflict.message ?? resolveExamConflictMessage(conflict.code)}
               >
                 {conflict.code.replace(/_/g, ' ')}
               </span>

@@ -10,91 +10,11 @@ import {
   type ScheduleClassEntryDto,
 } from '../api/scheduling';
 import { useResourcesCatalog } from '../contexts/ResourcesCatalogContext';
+import { DAYS_OF_WEEK, MATRIX_BUCKET_ORDER, type MatrixBucket } from '../types/scheduling';
+import { detectBucketFromTimeLabel, normalizeDayValue } from '../utils/scheduling';
 
-type MatrixBucket = 'morning' | 'afternoon' | 'evening';
-
-const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
-const bucketOrder: MatrixBucket[] = ['morning', 'afternoon', 'evening'];
-
-const dayAliases: Record<string, (typeof daysOfWeek)[number]> = {
-  mon: 'Monday',
-  monday: 'Monday',
-  tue: 'Tuesday',
-  tues: 'Tuesday',
-  tuesday: 'Tuesday',
-  wed: 'Wednesday',
-  weds: 'Wednesday',
-  wednesday: 'Wednesday',
-  thu: 'Thursday',
-  thur: 'Thursday',
-  thurs: 'Thursday',
-  thursday: 'Thursday',
-  fri: 'Friday',
-  friday: 'Friday',
-  sat: 'Saturday',
-  saturday: 'Saturday',
-  sun: 'Sunday',
-  sunday: 'Sunday',
-};
-
-const normalizeDayValue = (dayValue: string | null | undefined): (typeof daysOfWeek)[number] | null => {
-  if (!dayValue) {
-    return null;
-  }
-  const key = dayValue.trim().toLowerCase();
-  return dayAliases[key] ?? null;
-};
-
-const detectBucketFromTimeLabel = (label: string | null | undefined): MatrixBucket | null => {
-  if (!label) {
-    return null;
-  }
-
-  const normalized = label.toLowerCase();
-  if (normalized.includes('morning')) {
-    return 'morning';
-  }
-  if (normalized.includes('afternoon')) {
-    return 'afternoon';
-  }
-  if (normalized.includes('evening')) {
-    return 'evening';
-  }
-
-  const ampmMatch = normalized.match(/(\d{1,2})(?::\d{2})?\s*(am|pm)/);
-  if (ampmMatch) {
-    const hour = Number(ampmMatch[1]);
-    const minutePart = normalized.match(/\d{1,2}:(\d{2})\s*(am|pm)/);
-    const minute = minutePart ? Number(minutePart[1]) : 0;
-    const meridiem = ampmMatch[2];
-    if (meridiem === 'am') {
-      return 'morning';
-    }
-
-    const hour24 = hour % 12 + 12;
-    const totalMinutes = hour24 * 60 + minute;
-    if (totalMinutes < 16 * 60 + 30) {
-      return 'afternoon';
-    }
-    return 'evening';
-  }
-
-  const twentyFourMatch = normalized.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
-  if (twentyFourMatch) {
-    const hour = Number(twentyFourMatch[1]);
-    const minute = Number(twentyFourMatch[2]);
-    const totalMinutes = hour * 60 + minute;
-    if (totalMinutes < 12 * 60) {
-      return 'morning';
-    }
-    if (totalMinutes < 16 * 60 + 30) {
-      return 'afternoon';
-    }
-    return 'evening';
-  }
-
-  return null;
-};
+const daysOfWeek = DAYS_OF_WEEK;
+const bucketOrder: MatrixBucket[] = MATRIX_BUCKET_ORDER;
 
 export function GeneratedClassSchedulesPage() {
   const navigate = useNavigate();

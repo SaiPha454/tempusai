@@ -13,28 +13,30 @@ import {
   saveClassScheduleDraft,
   type ClassScheduleDraftDto,
   type ScheduleClassEntryDto,
-  type ScheduleConflictDto,
 } from '../api/scheduling';
 import { useResourcesCatalog } from '../contexts/ResourcesCatalogContext';
+import {
+  buildAllTimeslotsSorted,
+  buildBucketRows,
+  buildTimeslotsByDay,
+  getClassConflictDetail,
+  getRoomAvailabilityStatus,
+  recomputeClassDraftConflicts,
+  resolveEntryBucket as resolveEntryBucketFromMatrix,
+  resolveEntryDay as resolveEntryDayFromMatrix,
+  resolveTimeslotIdByDayBucket,
+} from '../services/scheduling';
+import { DAYS_OF_WEEK, type MatrixBucket } from '../types/scheduling';
+import {
+  readPreferredTimeslotsBySnapshot,
+} from '../utils/scheduling';
 
 type LocalEntry = ScheduleClassEntryDto;
 
-type MatrixBucket = 'morning' | 'afternoon' | 'evening';
 type DraftViewTab = 'Time & Days' | 'Room-Centric';
 
-const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
-
-const bucketOrder: MatrixBucket[] = ['morning', 'afternoon', 'evening'];
+const daysOfWeek = DAYS_OF_WEEK;
 const draftViewTabs: DraftViewTab[] = ['Time & Days', 'Room-Centric'];
-const CLASS_PREFS_STORAGE_PREFIX = 'classPreferredSlotsBySnapshot:';
-
-const conflictMessageByCode: Record<string, string> = {
-  room_overlap: 'Room has another class at this timeslot.',
-  professor_overlap: 'Professor has another class at this timeslot.',
-  year_overlap: 'This year already has a class at this timeslot.',
-  unassigned: 'Missing room or timeslot assignment.',
-  room_capacity_exceeded: 'Room capacity is smaller than expected enrollment.',
-};
 
 const yearCardStyles: Record<number, { container: string; badge: string }> = {
   // Year progression palette: foundation -> growth -> specialization -> capstone
@@ -56,153 +58,6 @@ const yearCardStyles: Record<number, { container: string; badge: string }> = {
   },
 };
 
-const dayAliases: Record<string, (typeof daysOfWeek)[number]> = {
-  mon: 'Monday',
-  monday: 'Monday',
-  tue: 'Tuesday',
-  tues: 'Tuesday',
-  tuesday: 'Tuesday',
-  wed: 'Wednesday',
-  weds: 'Wednesday',
-  wednesday: 'Wednesday',
-  thu: 'Thursday',
-  thur: 'Thursday',
-  thurs: 'Thursday',
-  thursday: 'Thursday',
-  fri: 'Friday',
-  friday: 'Friday',
-  sat: 'Saturday',
-  saturday: 'Saturday',
-  sun: 'Sunday',
-  sunday: 'Sunday',
-};
-
-const normalizeDayValue = (dayValue: string | null | undefined): (typeof daysOfWeek)[number] | null => {
-  if (!dayValue) {
-    return null;
-  }
-  const key = dayValue.trim().toLowerCase();
-  return dayAliases[key] ?? null;
-};
-
-const parseDisplayTime = (raw: string): string | null => {
-  const trimmed = raw.trim().toLowerCase();
-  const twelveHour = trimmed.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
-  if (twelveHour) {
-    const hour = Number(twelveHour[1]);
-    const minute = twelveHour[2] ? Number(twelveHour[2]) : 0;
-    const meridiem = twelveHour[3].toUpperCase();
-    return `${hour}:${String(minute).padStart(2, '0')} ${meridiem}`;
-  }
-
-  const twentyFourHour = trimmed.match(/^(\d{1,2})(?::(\d{2}))$/);
-  if (twentyFourHour) {
-    const hour24 = Number(twentyFourHour[1]);
-    const minute = Number(twentyFourHour[2]);
-    const isPm = hour24 >= 12;
-    const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
-    return `${hour12}:${String(minute).padStart(2, '0')} ${isPm ? 'PM' : 'AM'}`;
-  }
-
-  return null;
-};
-
-const formatTimeslotResourceLabel = (label: string): string => {
-  const parts = label
-    .split('-')
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (parts.length !== 2) {
-    return label;
-  }
-
-  const start = parseDisplayTime(parts[0]);
-  const end = parseDisplayTime(parts[1]);
-  if (!start || !end) {
-    return label;
-  }
-
-  return `${start} - ${end}`;
-};
-
-const detectBucketFromTimeLabel = (label: string | null | undefined): MatrixBucket | null => {
-  if (!label) {
-    return null;
-  }
-
-  const normalized = label.toLowerCase();
-  if (normalized.includes('morning')) {
-    return 'morning';
-  }
-  if (normalized.includes('afternoon')) {
-    return 'afternoon';
-  }
-  if (normalized.includes('evening')) {
-    return 'evening';
-  }
-
-  const ampmMatch = normalized.match(/(\d{1,2})(?::\d{2})?\s*(am|pm)/);
-  if (ampmMatch) {
-    const hour = Number(ampmMatch[1]);
-    const minutePart = normalized.match(/\d{1,2}:(\d{2})\s*(am|pm)/);
-    const minute = minutePart ? Number(minutePart[1]) : 0;
-    const meridiem = ampmMatch[2];
-    if (meridiem === 'am') {
-      return 'morning';
-    }
-
-    const hour24 = hour % 12 + 12;
-    const totalMinutes = hour24 * 60 + minute;
-    if (totalMinutes < 16 * 60 + 30) {
-      return 'afternoon';
-    }
-    return 'evening';
-  }
-
-  const twentyFourMatch = normalized.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
-  if (twentyFourMatch) {
-    const hour = Number(twentyFourMatch[1]);
-    const minute = Number(twentyFourMatch[2]);
-    const totalMinutes = hour * 60 + minute;
-    if (totalMinutes < 12 * 60) {
-      return 'morning';
-    }
-    if (totalMinutes < 16 * 60 + 30) {
-      return 'afternoon';
-    }
-    return 'evening';
-  }
-
-  return null;
-};
-
-const readPreferredTimeslotsByKey = (snapshotId: string | null): Record<string, string[]> => {
-  if (!snapshotId) {
-    return {};
-  }
-
-  try {
-    const raw = sessionStorage.getItem(`${CLASS_PREFS_STORAGE_PREFIX}${snapshotId}`);
-    if (!raw) {
-      return {};
-    }
-
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const normalized: Record<string, string[]> = {};
-    for (const [key, value] of Object.entries(parsed)) {
-      if (!Array.isArray(value)) {
-        continue;
-      }
-      const slotIds = value.filter((item): item is string => typeof item === 'string');
-      if (slotIds.length > 0) {
-        normalized[key] = slotIds;
-      }
-    }
-    return normalized;
-  } catch {
-    return {};
-  }
-};
 
 function readErrorMessage(error: unknown, fallback: string): string {
   const axiosError = error as AxiosError<{ detail?: string }>;
@@ -232,7 +87,7 @@ export function ScheduleDraftPage() {
   const [hoveredCellKey, setHoveredCellKey] = useState<string | null>(null);
 
   const preferredTimeslotsByKey = useMemo(
-    () => readPreferredTimeslotsByKey(snapshotId),
+    () => readPreferredTimeslotsBySnapshot(snapshotId),
     [snapshotId],
   );
 
@@ -318,78 +173,15 @@ export function ScheduleDraftPage() {
   }, [localEntries, years]);
 
   const timeslotsByDay = useMemo(() => {
-    const map = new Map<string, typeof timeslots>();
-    for (const day of daysOfWeek) {
-      map.set(day, []);
-    }
-
-    for (const slot of timeslots) {
-      const normalizedDay = normalizeDayValue(slot.day);
-      if (!normalizedDay || !map.has(normalizedDay)) {
-        continue;
-      }
-
-      const daySlots = map.get(normalizedDay) ?? [];
-      daySlots.push(slot);
-      map.set(normalizedDay, daySlots);
-    }
-
-    for (const day of daysOfWeek) {
-      const bucketRank = (slotLabel: string) => {
-        const bucket = detectBucketFromTimeLabel(slotLabel);
-        if (bucket === 'morning') {
-          return 0;
-        }
-        if (bucket === 'afternoon') {
-          return 1;
-        }
-        if (bucket === 'evening') {
-          return 2;
-        }
-        return 9;
-      };
-
-      const sorted = [...(map.get(day) ?? [])].sort((left, right) => {
-        const rankDiff = bucketRank(left.label) - bucketRank(right.label);
-        if (rankDiff !== 0) {
-          return rankDiff;
-        }
-        return left.label.localeCompare(right.label);
-      });
-      map.set(day, sorted);
-    }
-
-    return map;
+    return buildTimeslotsByDay(timeslots);
   }, [timeslots]);
 
   const allTimeslotsSorted = useMemo(() => {
-    const dayOrder = new Map(daysOfWeek.map((day, index) => [day, index]));
-    return [...timeslots].sort((left, right) => {
-      const leftDay = normalizeDayValue(left.day);
-      const rightDay = normalizeDayValue(right.day);
-      const leftRank = leftDay ? (dayOrder.get(leftDay) ?? 99) : 99;
-      const rightRank = rightDay ? (dayOrder.get(rightDay) ?? 99) : 99;
-      if (leftRank !== rightRank) {
-        return leftRank - rightRank;
-      }
-      return left.label.localeCompare(right.label);
-    });
+    return buildAllTimeslotsSorted(timeslots);
   }, [timeslots]);
 
   const bucketRows = useMemo(() => {
-    const firstByBucket = new Map<MatrixBucket, string>();
-    for (const slot of allTimeslotsSorted) {
-      const bucket = detectBucketFromTimeLabel(slot.label);
-      if (!bucket || firstByBucket.has(bucket)) {
-        continue;
-      }
-      firstByBucket.set(bucket, formatTimeslotResourceLabel(slot.label));
-    }
-
-    return bucketOrder.map((bucket) => ({
-      key: bucket,
-      label: firstByBucket.get(bucket) ?? 'Not configured',
-    }));
+    return buildBucketRows(allTimeslotsSorted);
   }, [allTimeslotsSorted]);
 
   const confirmedOccupancyByRoomTimeslot = useMemo(() => {
@@ -458,182 +250,43 @@ export function ScheduleDraftPage() {
 
   const totalEntriesCount = localEntries.length;
 
-  const recomputeLocalConflicts = (entries: LocalEntry[]): LocalEntry[] => {
-    const base = entries.map((entry) => ({ ...entry, conflicts: [] as ScheduleConflictDto[] }));
-    const byRoomSlot = new Map<string, LocalEntry[]>();
-    const byProfessorSlot = new Map<string, LocalEntry[]>();
-    const byYearSlot = new Map<string, LocalEntry[]>();
-
-    for (const entry of base) {
-      if (!entry.timeslot_id || !entry.room_id) {
-        entry.conflicts.push({ code: 'unassigned', message: conflictMessageByCode.unassigned });
-      }
-
-      if (entry.timeslot_id && entry.room_id) {
-        const occupiedKey = `${entry.room_id}-${entry.timeslot_id}`;
-        if (confirmedOccupancyByRoomTimeslot.has(occupiedKey)) {
-          entry.conflicts.push({ code: 'room_overlap', message: conflictMessageByCode.room_overlap });
-        }
-
-        if (draft?.constraints.roomCapacityCheck !== false) {
-          const roomCapacity = roomById.get(entry.room_id)?.capacity ?? 0;
-          const requiredCapacity = entry.required_capacity ?? 0;
-          if (requiredCapacity > roomCapacity) {
-            entry.conflicts.push({ code: 'room_capacity_exceeded', message: conflictMessageByCode.room_capacity_exceeded });
-          }
-        }
-
-        const key = `${entry.room_id}-${entry.timeslot_id}`;
-        const items = byRoomSlot.get(key) ?? [];
-        items.push(entry);
-        byRoomSlot.set(key, items);
-      }
-
-      if (draft?.constraints.professorNoOverlap !== false && entry.timeslot_id && entry.professor_id) {
-        const occupiedKey = `${entry.professor_id}-${entry.timeslot_id}`;
-        if (confirmedOccupancyByProfessorTimeslot.has(occupiedKey)) {
-          entry.conflicts.push({ code: 'professor_overlap', message: conflictMessageByCode.professor_overlap });
-        }
-
-        const key = `${entry.professor_id}-${entry.timeslot_id}`;
-        const items = byProfessorSlot.get(key) ?? [];
-        items.push(entry);
-        byProfessorSlot.set(key, items);
-      }
-
-      if (draft?.constraints.studentGroupsNoOverlap !== false && entry.timeslot_id) {
-        const key = `${entry.year}-${entry.timeslot_id}`;
-        const items = byYearSlot.get(key) ?? [];
-        items.push(entry);
-        byYearSlot.set(key, items);
-      }
-    }
-
-    const applyConflict = (grouped: Map<string, LocalEntry[]>, code: keyof typeof conflictMessageByCode) => {
-      for (const group of grouped.values()) {
-        if (group.length <= 1) {
-          continue;
-        }
-
-        for (const entry of group) {
-          if (!entry.conflicts.find((conflict) => conflict.code === code)) {
-            entry.conflicts.push({ code, message: conflictMessageByCode[code] });
-          }
-        }
-      }
-    };
-
-    applyConflict(byRoomSlot, 'room_overlap');
-    applyConflict(byProfessorSlot, 'professor_overlap');
-    applyConflict(byYearSlot, 'year_overlap');
-
-    return base;
-  };
-
-  const detectBucketFromLabel = (label: string | null): MatrixBucket | null => detectBucketFromTimeLabel(label);
+  const recomputeLocalConflicts = (entries: LocalEntry[]): LocalEntry[] =>
+    recomputeClassDraftConflicts({
+      entries,
+      settings: {
+        roomCapacityCheck: draft?.constraints.roomCapacityCheck !== false,
+        professorNoOverlap: draft?.constraints.professorNoOverlap !== false,
+        studentGroupsNoOverlap: draft?.constraints.studentGroupsNoOverlap !== false,
+      },
+      roomById,
+      confirmedOccupancyByRoomTimeslot,
+      confirmedOccupancyByProfessorTimeslot,
+    });
 
   const resolveTimeslotId = (day: string, bucket: MatrixBucket): string | null => {
-    const daySlots = timeslotsByDay.get(day) ?? [];
-
-    const findByBucket = (slots: typeof timeslots) =>
-      slots.find((slot) => {
-        const detected = detectBucketFromLabel(slot.label);
-        return detected === bucket;
-      });
-
-    const preferredByLabel = findByBucket(daySlots);
-    if (preferredByLabel) {
-      return preferredByLabel.id;
+    const normalizedDay = daysOfWeek.find((candidateDay) => candidateDay === day);
+    if (!normalizedDay) {
+      return null;
     }
-
-    return null;
+    return resolveTimeslotIdByDayBucket(timeslotsByDay, normalizedDay, bucket);
   };
 
   const resolveEntryBucket = (entry: LocalEntry): MatrixBucket | null => {
-    const byLabel = detectBucketFromLabel(entry.timeslot_label);
-    if (byLabel) {
-      return byLabel;
-    }
-
-    const slotById = entry.timeslot_id ? timeslotById.get(entry.timeslot_id) : undefined;
-    const byLookupLabel = detectBucketFromLabel(slotById?.label ?? null);
-    if (byLookupLabel) {
-      return byLookupLabel;
-    }
-
-    if (!entry.day || !entry.timeslot_id) {
-      return null;
-    }
-
-    const titleDay = normalizeDayValue(slotById?.day ?? entry.day);
-    if (!titleDay) {
-      return null;
-    }
-    const daySlots = timeslotsByDay.get(titleDay) ?? [];
-    const index = daySlots.findIndex((slot) => slot.id === entry.timeslot_id);
-    if (index <= 0) {
-      return 'morning';
-    }
-    if (index === 1) {
-      return 'afternoon';
-    }
-    return 'evening';
+    return resolveEntryBucketFromMatrix(entry, timeslotById, timeslotsByDay);
   };
 
   const resolveEntryDay = (entry: LocalEntry): (typeof daysOfWeek)[number] | null => {
-    const slotById = entry.timeslot_id ? timeslotById.get(entry.timeslot_id) : undefined;
-    return normalizeDayValue(slotById?.day ?? entry.day);
+    return resolveEntryDayFromMatrix(entry, timeslotById);
   };
 
-  const getConflictDetail = (entry: LocalEntry, code: string): string => {
-    if (code === 'unassigned') {
-      return conflictMessageByCode.unassigned;
-    }
-
-    const candidates = localEntries.filter((candidate) => candidate.id !== entry.id);
-
-    if (code === 'room_overlap' && entry.room_id && entry.timeslot_id) {
-      const matched = candidates.find(
-        (candidate) => candidate.room_id === entry.room_id && candidate.timeslot_id === entry.timeslot_id,
-      );
-      if (matched) {
-        return `Conflicts with ${matched.course_code} (${matched.course_name}) in Room ${entry.room_name ?? 'N/A'}.`;
-      }
-      return conflictMessageByCode.room_overlap;
-    }
-
-    if (code === 'professor_overlap' && entry.professor_id && entry.timeslot_id) {
-      const matched = candidates.find(
-        (candidate) => candidate.professor_id === entry.professor_id && candidate.timeslot_id === entry.timeslot_id,
-      );
-      if (matched) {
-        return `Conflicts with ${matched.course_code} (${matched.course_name}) for Professor ${entry.professor_name ?? 'N/A'}.`;
-      }
-      const confirmedMatch = confirmedOccupancyByProfessorTimeslot.get(`${entry.professor_id}-${entry.timeslot_id}`);
-      if (confirmedMatch) {
-        return `Conflicts with confirmed schedule ${confirmedMatch.courseCode} (${confirmedMatch.courseName}) for Professor ${entry.professor_name ?? 'N/A'}.`;
-      }
-      return conflictMessageByCode.professor_overlap;
-    }
-
-    if (code === 'year_overlap' && entry.timeslot_id) {
-      const matched = candidates.find(
-        (candidate) => candidate.year === entry.year && candidate.timeslot_id === entry.timeslot_id,
-      );
-      if (matched) {
-        return `Conflicts with ${matched.course_code} (${matched.course_name}) in Year ${entry.year}.`;
-      }
-      return conflictMessageByCode.year_overlap;
-    }
-
-    if (code === 'room_capacity_exceeded' && entry.room_id) {
-      const roomCapacity = roomById.get(entry.room_id)?.capacity ?? 0;
-      const requiredCapacity = entry.required_capacity ?? 0;
-      return `Room capacity ${roomCapacity} is below required enrollment ${requiredCapacity}.`;
-    }
-
-    return 'Conflict detected.';
-  };
+  const getConflictDetail = (entry: LocalEntry, code: string): string =>
+    getClassConflictDetail({
+      entry,
+      code,
+      localEntries,
+      roomById,
+      confirmedOccupancyByProfessorTimeslot,
+    });
 
   const updateEntryPlacement = (entryId: string, timeslotId: string | null, roomId: string | null) => {
     setLocalEntries((prev) => {
@@ -912,28 +565,13 @@ export function ScheduleDraftPage() {
 
   const selectableRooms = selectedRooms.length > 0 ? selectedRooms : rooms;
 
-  const getRoomAvailabilityStatus = (entry: LocalEntry, roomId: string): 'available' | 'used_draft' | 'used_confirmed' => {
-    if (!entry.timeslot_id) {
-      return 'available';
-    }
-
-    const occupancyKey = `${roomId}-${entry.timeslot_id}`;
-    if (confirmedOccupancyByRoomTimeslot.has(occupancyKey)) {
-      return 'used_confirmed';
-    }
-
-    const usedInDraft = localEntries.some(
-      (candidate) =>
-        candidate.id !== entry.id &&
-        candidate.timeslot_id === entry.timeslot_id &&
-        candidate.room_id === roomId,
-    );
-    if (usedInDraft) {
-      return 'used_draft';
-    }
-
-    return 'available';
-  };
+  const getEntryRoomAvailabilityStatus = (entry: LocalEntry, roomId: string) =>
+    getRoomAvailabilityStatus({
+      entry,
+      roomId,
+      localEntries,
+      confirmedOccupancyByRoomTimeslot,
+    });
 
   const handleEntryRoomChange = (entry: LocalEntry, roomId: string) => {
     updateEntryPlacement(entry.id, entry.timeslot_id, roomId || null);
@@ -1005,7 +643,7 @@ export function ScheduleDraftPage() {
             >
               <option value="">Unassigned</option>
               {selectableRooms.map((room) => {
-                const status = getRoomAvailabilityStatus(entry, room.id);
+                const status = getEntryRoomAvailabilityStatus(entry, room.id);
                 const statusLabel =
                   status === 'available'
                     ? 'available'
