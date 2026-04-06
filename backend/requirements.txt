@@ -5,3 +5,9 @@ alembic
 psycopg[binary]
 pydantic-settings
 python-dotenv
+openai
+llama-index-core
+llama-index-llms-openai
+llama-index-embeddings-openai
+llama-index-vector-stores-postgres
+pgvector
