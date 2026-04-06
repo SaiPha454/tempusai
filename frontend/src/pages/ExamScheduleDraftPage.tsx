@@ -1397,6 +1397,7 @@ export function ExamScheduleDraftPage() {
                           const isValidPlacementTarget = Boolean(
                             draggingEntry && canPlaceEntryInRoomCell(draggingEntry, activeDay, slot.value, room.id),
                           );
+                          const isInvalidPlacementTarget = Boolean(draggingEntry) && !isValidPlacementTarget;
 
                           const entriesInCell = filteredEntries.filter(
                             (entry) =>
@@ -1432,13 +1433,15 @@ export function ExamScheduleDraftPage() {
                                 onDropToRoomCell(activeDay, slot.value, room.id);
                               }}
                               className={`min-h-[170px] border-r border-b border-slate-200 p-2 last:border-r-0 ${
-                                confirmedBlocking ? 'bg-rose-50' : 'bg-white'
-                              } ${
                                 hoveredCellKey === cellKey
-                                  ? 'bg-sky-50 ring-1 ring-inset ring-sky-300'
+                                  ? 'bg-sky-100 ring-1 ring-inset ring-sky-300'
                                   : isValidPlacementTarget
-                                    ? 'bg-emerald-50 ring-1 ring-inset ring-emerald-300'
-                                    : ''
+                                    ? 'bg-emerald-100 ring-1 ring-inset ring-emerald-400'
+                                    : isInvalidPlacementTarget
+                                      ? 'bg-rose-100 ring-1 ring-inset ring-rose-400'
+                                      : confirmedBlocking
+                                        ? 'bg-rose-50'
+                                        : 'bg-white'
                               }`}
                             >
                               {hiddenOtherProgramCount > 0 && (

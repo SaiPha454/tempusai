@@ -784,7 +784,13 @@ export function ScheduleDraftPage() {
       return false;
     }
 
-    return Boolean(findValidRoomIdForTimeCell(entry, day, bucket));
+    const preferredRoomIds = [entry.room_id, ...selectableRooms.map((room) => room.id)].filter(
+      (roomId): roomId is string => Boolean(roomId),
+    );
+    const uniqueRoomIds = Array.from(new Set(preferredRoomIds));
+
+    // Green hint means at least one room can satisfy all hard constraints at this time cell.
+    return uniqueRoomIds.some((roomId) => canPlaceEntryInRoomCell(entry, day, bucket, roomId));
   };
 
   const findValidRoomIdForTimeCell = (entry: LocalEntry, day: string, bucket: MatrixBucket): string | null => {
@@ -1224,6 +1230,8 @@ export function ScheduleDraftPage() {
                               !isUnavailableCell &&
                               Boolean(draggingEntry) &&
                               canPlaceEntryInTimeCell(draggingEntry as LocalEntry, day, row.key);
+                            const isInvalidPlacementTarget =
+                              !isUnavailableCell && Boolean(draggingEntry) && !isValidPlacementTarget;
                             const isDroppableCell = !isUnavailableCell;
                             const cellKey = `${year}-${row.key}-${day}`;
                             const entriesInCell = yearEntries.filter((entry) => {
@@ -1257,12 +1265,14 @@ export function ScheduleDraftPage() {
                                   }
                                   onDropToMatrixCell(day, row.key);
                                 }}
-                                className={`min-h-[150px] border-r border-b border-slate-200 bg-white p-2 last:border-r-0 ${
+                                className={`min-h-[150px] border-r border-b border-slate-200 p-2 last:border-r-0 ${
                                   hoveredCellKey === cellKey
-                                    ? 'bg-sky-50 ring-1 ring-inset ring-sky-300'
+                                    ? 'bg-sky-100 ring-1 ring-inset ring-sky-300'
                                     : isValidPlacementTarget
-                                      ? 'bg-emerald-50 ring-1 ring-inset ring-emerald-300'
-                                      : ''
+                                      ? 'bg-emerald-100 ring-1 ring-inset ring-emerald-400'
+                                      : isInvalidPlacementTarget
+                                        ? 'bg-rose-100 ring-1 ring-inset ring-rose-400'
+                                      : 'bg-white'
                                 }`}
                               >
                                 <div className="space-y-2">
@@ -1345,6 +1355,8 @@ export function ScheduleDraftPage() {
                             !isUnavailableCell &&
                             Boolean(draggingEntry) &&
                             canPlaceEntryInRoomCell(draggingEntry as LocalEntry, day, row.key, room.id);
+                          const isInvalidPlacementTarget =
+                            !isUnavailableCell && Boolean(draggingEntry) && !isValidPlacementTarget;
                           const isDroppableCell = !isUnavailableCell;
                           const cellKey = `${room.id}-${row.key}-${day}`;
                           const entriesInCell = localEntries.filter((entry) => {
@@ -1379,13 +1391,15 @@ export function ScheduleDraftPage() {
                                 onDropToRoomCell(day, row.key, room.id);
                               }}
                               className={`min-h-[130px] border-r border-b border-slate-200 p-2 last:border-r-0 ${
-                                occupiedCell ? 'bg-rose-50' : 'bg-white'
-                              } ${
                                 hoveredCellKey === cellKey
-                                  ? 'bg-sky-50 ring-1 ring-inset ring-sky-300'
+                                  ? 'bg-sky-100 ring-1 ring-inset ring-sky-300'
                                   : isValidPlacementTarget
-                                    ? 'bg-emerald-50 ring-1 ring-inset ring-emerald-300'
-                                    : ''
+                                    ? 'bg-emerald-100 ring-1 ring-inset ring-emerald-400'
+                                    : isInvalidPlacementTarget
+                                      ? 'bg-rose-100 ring-1 ring-inset ring-rose-400'
+                                      : occupiedCell
+                                        ? 'bg-rose-50'
+                                        : 'bg-white'
                               }`}
                             >
                               <div className="space-y-2">
