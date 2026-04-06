@@ -277,8 +277,19 @@ export async function deleteExamScheduleDraft(snapshotId: string): Promise<void>
   await apiClient.delete(`${examBasePath}/drafts/${snapshotId}`);
 }
 
-export async function makeExamScheduleAsDraft(snapshotId: string): Promise<ExamScheduleDraftDto> {
-  const response = await apiClient.post<ExamScheduleDraftDto>(`${examBasePath}/schedules/${snapshotId}/make-draft`);
+export async function makeExamScheduleAsDraft(
+  snapshotId: string,
+  programValue?: string,
+): Promise<ExamScheduleDraftDto> {
+  const response = await apiClient.post<ExamScheduleDraftDto>(
+    `${examBasePath}/schedules/${snapshotId}/make-draft`,
+    undefined,
+    {
+      params: {
+        ...(programValue ? { program_value: programValue } : {}),
+      },
+    },
+  );
   return response.data;
 }
 

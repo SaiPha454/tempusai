@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
+from app.repositories.schedule_occupancy_repository import ScheduleOccupancyRepository
 from app.models.resource import (
     Course,
     Program,
@@ -35,6 +36,9 @@ from app.schemas.scheduling import (
 )
 from app.services.errors import bad_request, not_found
 from app.services.prolog_csp import PrologExamRow, PrologExamScheduler
+from app.services.scheduling.exam_conflict_detector import ExamConflictDetector
+from app.services.scheduling.exam_draft_scope_service import ExamDraftScopeService
+from app.services.scheduling.exam_patch_service import ExamDraftPatchService
 
 EXAM_SLOT_LABELS: dict[str, str] = {
     "morning-exam": "09:00 - 12:00",
@@ -81,6 +85,10 @@ class ExamItem:
 class ExamSchedulingService:
     def __init__(self, db: Session) -> None:
         self.db = db
+        self._occupancy_repository = ScheduleOccupancyRepository(db)
+        self._patch_service = ExamDraftPatchService(db)
+        self._conflict_detector = ExamConflictDetector()
+        self._draft_scope_service = ExamDraftScopeService(db)
 
     def create_exam_generation_job(self, payload: ExamScheduleGenerateRequest) -> ExamScheduleJobRead:
         cleaned_job_name = payload.job_name.strip()
@@ -128,7 +136,7 @@ class ExamSchedulingService:
         if not items:
             raise bad_request("No exam subjects were provided for generation")
 
-        confirmed_exam_room_slots = self._get_confirmed_exam_room_slots()
+        confirmed_exam_room_slots = self._occupancy_repository.get_confirmed_exam_room_slots()
         student_overlap_edges = self._build_student_overlap_edges(items) if constraints["no_student_overlap"] else defaultdict(set)
 
         slot_keys_by_idx: dict[int, list[str]] = {
@@ -250,7 +258,7 @@ class ExamSchedulingService:
         snapshot = self._get_exam_snapshot(snapshot_id)
         entries, conflict_count = self._serialize_exam_entries_with_conflicts(snapshot)
         selected_room_ids = self._get_room_ids_by_names(snapshot.selected_room_names)
-        confirmed_occupancies = self._list_confirmed_exam_occupancies(
+        confirmed_occupancies = self._occupancy_repository.list_confirmed_exam_occupancies(
             exclude_snapshot_id=snapshot.id,
             room_ids=selected_room_ids,
         )
@@ -274,25 +282,7 @@ class ExamSchedulingService:
         snapshot = self._get_exam_snapshot(snapshot_id)
         entry_by_id = {entry.id: entry for entry in snapshot.entries}
 
-        for patch in payload.entries:
-            entry = entry_by_id.get(patch.id)
-            if not entry:
-                raise bad_request("Draft entry does not belong to this exam snapshot")
-
-            entry.exam_date = patch.exam_date
-            entry.timeslot_code = patch.timeslot_code
-
-            if patch.room_id is not None:
-                room = self.db.get(Room, patch.room_id)
-                if not room:
-                    raise bad_request("Room does not exist")
-                entry.room_id = room.id
-                entry.room = room
-            else:
-                entry.room_id = None
-                entry.room = None
-
-            entry.manually_adjusted = True
+        self._patch_service.apply_entry_patches(entry_by_id=entry_by_id, patches=payload.entries)
 
         self.db.commit()
         return self.get_exam_draft(snapshot.id)
@@ -301,25 +291,7 @@ class ExamSchedulingService:
         snapshot = self._get_exam_snapshot(snapshot_id)
         entry_by_id = {entry.id: entry for entry in snapshot.entries}
 
-        for patch in payload.entries:
-            entry = entry_by_id.get(patch.id)
-            if not entry:
-                raise bad_request("Draft entry does not belong to this exam snapshot")
-
-            entry.exam_date = patch.exam_date
-            entry.timeslot_code = patch.timeslot_code
-
-            if patch.room_id is not None:
-                room = self.db.get(Room, patch.room_id)
-                if not room:
-                    raise bad_request("Room does not exist")
-                entry.room_id = room.id
-                entry.room = room
-            else:
-                entry.room_id = None
-                entry.room = None
-
-            entry.manually_adjusted = True
+        self._patch_service.apply_entry_patches(entry_by_id=entry_by_id, patches=payload.entries)
 
         # Ensure relationship/FK changes are synchronized before conflict checks.
         self.db.flush()
@@ -374,12 +346,17 @@ class ExamSchedulingService:
         self.db.delete(snapshot)
         self.db.commit()
 
-    def make_exam_schedule_as_draft(self, snapshot_id: UUID) -> ExamScheduleDraftRead:
+    def make_exam_schedule_as_draft(
+        self,
+        snapshot_id: UUID,
+        program_value: str | None = None,
+    ) -> ExamScheduleDraftRead:
         snapshot = self._get_exam_snapshot(snapshot_id)
-        if snapshot.status != "draft":
-            snapshot.status = "draft"
-            self.db.commit()
-        return self.get_exam_draft(snapshot.id)
+        draft_snapshot_id = self._draft_scope_service.make_as_draft(
+            snapshot=snapshot,
+            program_value=program_value,
+        )
+        return self.get_exam_draft(draft_snapshot_id)
 
     def delete_exam_schedule_program(self, snapshot_id: UUID, program_value: str) -> None:
         snapshot = self._get_exam_snapshot(snapshot_id)
@@ -767,10 +744,8 @@ class ExamSchedulingService:
         constraints: dict[str, bool],
         exclude_snapshot_id: UUID,
     ) -> dict[UUID, list[str]]:
-        conflicts_by_id: defaultdict[UUID, list[str]] = defaultdict(list)
-
         room_demand = self._build_exam_entry_demand(entries)
-        confirmed_room_slots = self._get_confirmed_exam_room_slots(exclude_snapshot_id=exclude_snapshot_id)
+        confirmed_room_slots = self._occupancy_repository.get_confirmed_exam_room_slots(exclude_snapshot_id=exclude_snapshot_id)
         involved_room_ids = {entry.room_id for entry in entries if entry.room_id is not None}
         room_capacity_by_id: dict[UUID, int] = {}
         if involved_room_ids:
@@ -781,59 +756,16 @@ class ExamSchedulingService:
                 ).all()
             }
 
-        by_room_slot: defaultdict[tuple[UUID, date, str], list[ScheduleExamEntry]] = defaultdict(list)
-        by_program_year_slot: defaultdict[tuple[UUID, int, date, str], list[ScheduleExamEntry]] = defaultdict(list)
-
-        row_by_idx = {index: entry for index, entry in enumerate(entries)}
         student_edges = self._build_student_overlap_edges_from_entries(entries)
 
-        by_idx = {entry.id: idx for idx, entry in row_by_idx.items()}
-
-        for entry in entries:
-            if not entry.exam_date or not entry.timeslot_code or not entry.room_id:
-                conflicts_by_id[entry.id].append("unassigned")
-                continue
-
-            if constraints.get("room_capacity_check", True):
-                required = room_demand.get(entry.id, 0)
-                room_capacity = room_capacity_by_id.get(entry.room_id)
-                if room_capacity is not None and room_capacity < required:
-                    conflicts_by_id[entry.id].append("room_capacity_exceeded")
-
-            room_key = (entry.room_id, entry.exam_date, entry.timeslot_code)
-            if room_key in confirmed_room_slots:
-                conflicts_by_id[entry.id].append("room_overlap")
-            by_room_slot[room_key].append(entry)
-
-            if constraints.get("no_same_program_year_day_timeslot", True):
-                by_program_year_slot[(entry.program_id, entry.year, entry.exam_date, entry.timeslot_code)].append(entry)
-
-        for grouped in by_room_slot.values():
-            if len(grouped) <= 1:
-                continue
-            for entry in grouped:
-                conflicts_by_id[entry.id].append("room_overlap")
-
-        for grouped in by_program_year_slot.values():
-            if len(grouped) <= 1:
-                continue
-            for entry in grouped:
-                conflicts_by_id[entry.id].append("program_year_overlap")
-
-        if constraints.get("no_student_overlap", True):
-            for entry in entries:
-                idx = by_idx.get(entry.id)
-                if idx is None or not entry.exam_date or not entry.timeslot_code:
-                    continue
-                for conflict_idx in student_edges.get(idx, set()):
-                    other = row_by_idx.get(conflict_idx)
-                    if not other or other.id == entry.id:
-                        continue
-                    if other.exam_date == entry.exam_date and other.timeslot_code == entry.timeslot_code:
-                        conflicts_by_id[entry.id].append("student_overlap")
-                        break
-
-        return conflicts_by_id
+        return self._conflict_detector.compute_entry_conflicts(
+            entries=entries,
+            constraints=constraints,
+            room_demand=room_demand,
+            room_capacity_by_id=room_capacity_by_id,
+            confirmed_room_slots=confirmed_room_slots,
+            student_edges_by_index=student_edges,
+        )
 
     def _serialize_exam_entries_with_conflicts(
         self,
@@ -902,27 +834,9 @@ class ExamSchedulingService:
         *,
         exclude_snapshot_id: UUID | None = None,
     ) -> set[tuple[UUID, date, str]]:
-        stmt = (
-            select(
-                ScheduleExamEntry.room_id,
-                ScheduleExamEntry.exam_date,
-                ScheduleExamEntry.timeslot_code,
-            )
-            .join(ScheduleExamSnapshot, ScheduleExamSnapshot.id == ScheduleExamEntry.snapshot_id)
-            .where(
-                ScheduleExamSnapshot.status == "confirmed",
-                ScheduleExamEntry.room_id.is_not(None),
-                ScheduleExamEntry.exam_date.is_not(None),
-                ScheduleExamEntry.timeslot_code.is_not(None),
-            )
+        return self._occupancy_repository.get_confirmed_exam_room_slots(
+            exclude_snapshot_id=exclude_snapshot_id,
         )
-        if exclude_snapshot_id is not None:
-            stmt = stmt.where(ScheduleExamEntry.snapshot_id != exclude_snapshot_id)
-
-        result: set[tuple[UUID, date, str]] = set()
-        for room_id, exam_date, slot_code in self.db.execute(stmt).all():
-            result.add((room_id, exam_date, slot_code))
-        return result
 
     def _list_confirmed_exam_occupancies(
         self,
@@ -930,53 +844,10 @@ class ExamSchedulingService:
         exclude_snapshot_id: UUID,
         room_ids: set[UUID] | None,
     ) -> list[ConfirmedExamOccupancyRead]:
-        if room_ids is not None and len(room_ids) == 0:
-            return []
-
-        stmt = (
-            select(
-                ScheduleExamEntry.room_id,
-                ScheduleExamEntry.exam_date,
-                ScheduleExamEntry.timeslot_code,
-                Course.code,
-                Course.name,
-            )
-            .join(ScheduleExamSnapshot, ScheduleExamSnapshot.id == ScheduleExamEntry.snapshot_id)
-            .join(Course, Course.id == ScheduleExamEntry.course_id)
-            .where(
-                ScheduleExamSnapshot.status == "confirmed",
-                ScheduleExamEntry.snapshot_id != exclude_snapshot_id,
-                ScheduleExamEntry.room_id.is_not(None),
-                ScheduleExamEntry.exam_date.is_not(None),
-                ScheduleExamEntry.timeslot_code.is_not(None),
-            )
+        return self._occupancy_repository.list_confirmed_exam_occupancies(
+            exclude_snapshot_id=exclude_snapshot_id,
+            room_ids=room_ids,
         )
-
-        if room_ids is not None:
-            stmt = stmt.where(ScheduleExamEntry.room_id.in_(room_ids))
-
-        rows = self.db.execute(stmt).all()
-        if not rows:
-            return []
-
-        seen: set[tuple[UUID, date, str]] = set()
-        output: list[ConfirmedExamOccupancyRead] = []
-        for room_id, exam_date, slot_code, course_code, course_name in rows:
-            key = (room_id, exam_date, slot_code)
-            if key in seen:
-                continue
-            seen.add(key)
-            output.append(
-                ConfirmedExamOccupancyRead(
-                    room_id=room_id,
-                    exam_date=exam_date,
-                    timeslot_code=slot_code,
-                    course_code=course_code,
-                    course_name=course_name,
-                )
-            )
-
-        return output
 
     def _build_course_demand_map_for_program(
         self,

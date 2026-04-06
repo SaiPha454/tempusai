@@ -4,18 +4,10 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Card } from '../components/Card';
 import { useResourcesCatalog } from '../contexts/ResourcesCatalogContext';
 import { createProgramYearRow, deleteProgramYearRow, updateProgram, updateProgramYearRow } from '../api/resources';
+import type { ProgramYearCourse, ProgramYearPlan } from '../contexts/ResourcesCatalogContext';
 
-type YearCourse = {
-  id: string;
-  code: string;
-  name: string;
-  professorName: string;
-};
-
-type YearPlan = {
-  year: number;
-  courses: YearCourse[];
-};
+type YearCourse = ProgramYearCourse;
+type YearPlan = ProgramYearPlan;
 
 type CourseOption = {
   code: string;
@@ -238,6 +230,7 @@ export function ProgramDetailPage() {
         id: updated.id,
         code: updated.course_code,
         name: updated.course_name,
+        professorId: null,
         professorName: updated.professor_name ?? '',
       }));
 
@@ -270,6 +263,7 @@ export function ProgramDetailPage() {
                     id: created.id,
                     code: created.course_code,
                     name: created.course_name,
+                    professorId: null,
                     professorName: created.professor_name ?? '',
                   },
                 ],
