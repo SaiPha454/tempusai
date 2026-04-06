@@ -2,7 +2,6 @@ import { BookOpen, Check, Pencil, Plus, Trash2 } from 'lucide-react';
 import { Card } from '../../components/Card';
 import { SelectField } from '../../components/SelectField';
 import { MultiSelectDropdown } from '../../components/MultiSelectDropdown';
-import { UploadPanel } from '../../components/UploadPanel';
 
 type SelectOption = { value: string; label: string };
 
@@ -24,8 +23,6 @@ type CourseResource = {
 };
 
 type SpecialEnrollementsSectionProps = {
-  enrollmentUploadName: string;
-  onEnrollmentUploadNameChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
   enrollmentStudentIdInput: string;
   onEnrollmentStudentIdInputChange: (value: string) => void;
   enrollmentCourseCodesInput: string[];
@@ -51,8 +48,6 @@ type SpecialEnrollementsSectionProps = {
 };
 
 export function SpecialEnrollementsSection({
-  enrollmentUploadName,
-  onEnrollmentUploadNameChange,
   enrollmentStudentIdInput,
   onEnrollmentStudentIdInputChange,
   enrollmentCourseCodesInput,
@@ -78,13 +73,6 @@ export function SpecialEnrollementsSection({
 }: SpecialEnrollementsSectionProps) {
   return (
     <div className="space-y-6">
-      <UploadPanel
-        title="Special Enrollements bulk import"
-        description="Upload an Excel file to import special enrollements (retake/withdraw/skip cases)."
-        fileName={enrollmentUploadName}
-        onFileChange={onEnrollmentUploadNameChange}
-      />
-
       <Card title="Special Enrollements" icon={BookOpen}>
         <p className="mb-3 text-xs text-slate-600">
           Students are normally auto-enrolled by year and study program. Use this tab only for

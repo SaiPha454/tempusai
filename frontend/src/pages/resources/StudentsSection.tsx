@@ -1,9 +1,7 @@
-import { type ChangeEvent } from 'react';
 import { Check, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { Card } from '../../components/Card';
 import { InputField } from '../../components/InputField';
 import { SelectField } from '../../components/SelectField';
-import { UploadPanel } from '../../components/UploadPanel';
 
 type SelectOption = { value: string; label: string };
 
@@ -21,8 +19,6 @@ type ProgramResource = {
 };
 
 type StudentsSectionProps = {
-  studentUploadName: string;
-  onStudentUploadNameChange: (event: ChangeEvent<HTMLInputElement>) => void;
   studentIdInput: string;
   setStudentIdInput: React.Dispatch<React.SetStateAction<string>>;
   studentNameInput: string;
@@ -51,8 +47,6 @@ type StudentsSectionProps = {
 };
 
 export function StudentsSection({
-  studentUploadName,
-  onStudentUploadNameChange,
   studentIdInput,
   setStudentIdInput,
   studentNameInput,
@@ -81,13 +75,6 @@ export function StudentsSection({
 }: StudentsSectionProps) {
   return (
     <div className="space-y-6">
-      <UploadPanel
-        title="Student bulk import"
-        description="Upload an Excel file to import student records."
-        fileName={studentUploadName}
-        onFileChange={onStudentUploadNameChange}
-      />
-
       <Card title="Students" icon={Users}>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <InputField value={studentIdInput} onChange={setStudentIdInput} placeholder="Student ID" />

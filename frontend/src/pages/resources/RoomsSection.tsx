@@ -2,13 +2,10 @@ import { type Dispatch, type SetStateAction } from 'react';
 import { Building2, Check, Pencil, Plus, Trash2 } from 'lucide-react';
 import { Card } from '../../components/Card';
 import { InputField } from '../../components/InputField';
-import { UploadPanel } from '../../components/UploadPanel';
 
 type RoomResource = { id: string; name: string; capacity: string };
 
 type RoomsSectionProps = {
-  roomUploadName: string;
-  onRoomUploadNameChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
   roomNameInput: string;
   setRoomNameInput: React.Dispatch<React.SetStateAction<string>>;
   roomCapacityInput: string;
@@ -28,8 +25,6 @@ type RoomsSectionProps = {
 };
 
 export function RoomsSection({
-  roomUploadName,
-  onRoomUploadNameChange,
   roomNameInput,
   setRoomNameInput,
   roomCapacityInput,
@@ -49,13 +44,6 @@ export function RoomsSection({
 }: RoomsSectionProps) {
   return (
     <div className="space-y-6">
-      <UploadPanel
-        title="Room bulk import"
-        description="Upload an Excel file to import room names and capacities."
-        fileName={roomUploadName}
-        onFileChange={onRoomUploadNameChange}
-      />
-
       <Card title="Rooms" icon={Building2}>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <div className="relative">

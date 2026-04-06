@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useResourcesCatalog, type CourseResource } from '../contexts/ResourcesCatalogContext';
 import { Tabs } from '../components/Tabs';
@@ -130,11 +130,6 @@ export function ResourcesPage() {
   const [enrollmentStudentIdInput, setEnrollmentStudentIdInput] = useState('');
   const [enrollmentCourseCodesInput, setEnrollmentCourseCodesInput] = useState<string[]>([]);
 
-  const [roomUploadName, setRoomUploadName] = useState('');
-  const [courseUploadName, setCourseUploadName] = useState('');
-  const [professorUploadName, setProfessorUploadName] = useState('');
-  const [studentUploadName, setStudentUploadName] = useState('');
-  const [enrollmentUploadName, setEnrollmentUploadName] = useState('');
   const [isRoomNameFocused, setIsRoomNameFocused] = useState(false);
   const [isProgramNameFocused, setIsProgramNameFocused] = useState(false);
   const [editingRoomIds, setEditingRoomIds] = useState<Record<string, boolean>>({});
@@ -356,10 +351,6 @@ export function ResourcesPage() {
   const showProgramSuggestions = isProgramNameFocused && programNameInput.trim().length > 0;
   const showCourseSuggestions =
     courseSuggestionAnchor === 'code' && courseCodeInput.trim().length > 0;
-
-  const handleUploadName = (event: ChangeEvent<HTMLInputElement>, setter: (value: string) => void) => {
-    setter(event.target.files?.[0]?.name ?? '');
-  };
 
   const toggleEditing = (id: string, setter: Dispatch<SetStateAction<Record<string, boolean>>>) => {
     setter((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -840,8 +831,6 @@ export function ResourcesPage() {
       <div className="mt-6 space-y-6 pb-8">
         {activeTab === 'Rooms' && (
           <RoomsSection
-            roomUploadName={roomUploadName}
-            onRoomUploadNameChange={(event) => handleUploadName(event, setRoomUploadName)}
             roomNameInput={roomNameInput}
             setRoomNameInput={setRoomNameInput}
             roomCapacityInput={roomCapacityInput}
@@ -881,8 +870,6 @@ export function ResourcesPage() {
 
         {activeTab === 'Course (Subject)' && (
           <CourseSection
-            courseUploadName={courseUploadName}
-            onCourseUploadNameChange={(event) => handleUploadName(event, setCourseUploadName)}
             courseCodeInput={courseCodeInput}
             setCourseCodeInput={setCourseCodeInput}
             courseNameInput={courseNameInput}
@@ -941,10 +928,6 @@ export function ResourcesPage() {
 
         {activeTab === 'Professors' && (
           <ProfessorsSection
-            professorUploadName={professorUploadName}
-            onProfessorUploadNameChange={(event) =>
-              handleUploadName(event, setProfessorUploadName)
-            }
             professorNameInput={professorNameInput}
             setProfessorNameInput={setProfessorNameInput}
             professorAvailabilityInput={professorAvailabilityInput}
@@ -974,8 +957,6 @@ export function ResourcesPage() {
 
         {activeTab === 'Students' && (
           <StudentsSection
-            studentUploadName={studentUploadName}
-            onStudentUploadNameChange={(event) => handleUploadName(event, setStudentUploadName)}
             studentIdInput={studentIdInput}
             setStudentIdInput={setStudentIdInput}
             studentNameInput={studentNameInput}
@@ -1022,8 +1003,6 @@ export function ResourcesPage() {
 
         {activeTab === 'Special Enrollements' && (
           <SpecialEnrollementsSection
-            enrollmentUploadName={enrollmentUploadName}
-            onEnrollmentUploadNameChange={(event) => handleUploadName(event, setEnrollmentUploadName)}
             enrollmentStudentIdInput={enrollmentStudentIdInput}
             onEnrollmentStudentIdInputChange={(value) => {
               setEnrollmentStudentIdInput(value);

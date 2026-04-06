@@ -1,9 +1,7 @@
-import { type ChangeEvent } from 'react';
 import { Check, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { Card } from '../../components/Card';
 import { InputField } from '../../components/InputField';
 import { MultiSelectDropdown } from '../../components/MultiSelectDropdown';
-import { UploadPanel } from '../../components/UploadPanel';
 
 type SelectOption = { value: string; label: string };
 
@@ -14,8 +12,6 @@ type ProfessorResource = {
 };
 
 type ProfessorsSectionProps = {
-  professorUploadName: string;
-  onProfessorUploadNameChange: (event: ChangeEvent<HTMLInputElement>) => void;
   professorNameInput: string;
   setProfessorNameInput: React.Dispatch<React.SetStateAction<string>>;
   professorAvailabilityInput: string[];
@@ -35,8 +31,6 @@ type ProfessorsSectionProps = {
 };
 
 export function ProfessorsSection({
-  professorUploadName,
-  onProfessorUploadNameChange,
   professorNameInput,
   setProfessorNameInput,
   professorAvailabilityInput,
@@ -56,13 +50,6 @@ export function ProfessorsSection({
 }: ProfessorsSectionProps) {
   return (
     <div className="space-y-6">
-      <UploadPanel
-        title="Professor bulk import"
-        description="Upload an Excel file to import professors and availability data."
-        fileName={professorUploadName}
-        onFileChange={onProfessorUploadNameChange}
-      />
-
       <Card title="Professors" icon={Users}>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <InputField

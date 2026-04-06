@@ -1,8 +1,6 @@
-import { type ChangeEvent } from 'react';
 import { BookOpen, Check, Pencil, Plus, Trash2 } from 'lucide-react';
 import { Card } from '../../components/Card';
 import { SelectField } from '../../components/SelectField';
-import { UploadPanel } from '../../components/UploadPanel';
 
 type SelectOption = { value: string; label: string };
 
@@ -21,8 +19,6 @@ type CourseSuggestion = {
 };
 
 type CourseSectionProps = {
-  courseUploadName: string;
-  onCourseUploadNameChange: (event: ChangeEvent<HTMLInputElement>) => void;
   courseCodeInput: string;
   setCourseCodeInput: React.Dispatch<React.SetStateAction<string>>;
   courseNameInput: string;
@@ -53,8 +49,6 @@ type CourseSectionProps = {
 };
 
 export function CourseSection({
-  courseUploadName,
-  onCourseUploadNameChange,
   courseCodeInput,
   setCourseCodeInput,
   courseNameInput,
@@ -84,13 +78,6 @@ export function CourseSection({
 }: CourseSectionProps) {
   return (
     <div className="space-y-6">
-      <UploadPanel
-        title="Course bulk import"
-        description="Upload an Excel file to import courses and subject metadata."
-        fileName={courseUploadName}
-        onFileChange={onCourseUploadNameChange}
-      />
-
       <Card title="Course (Subject)" icon={BookOpen}>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <div className="relative">
