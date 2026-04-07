@@ -14,3 +14,4 @@ pgvector
 pytest
 pytest-cov
 httpx
+ruff
