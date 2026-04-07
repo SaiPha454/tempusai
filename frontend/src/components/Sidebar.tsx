@@ -1,5 +1,6 @@
 import { PenSquare, type LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
+import type { ReactNode } from 'react';
 
 type SidebarLinkItem = {
   type?: 'link';
@@ -20,11 +21,12 @@ type SidebarProps = {
   brand: string;
   items: SidebarItem[];
   onNewConversation: () => void;
+  footer?: ReactNode;
 };
 
-export function Sidebar({ brand, items, onNewConversation }: SidebarProps) {
+export function Sidebar({ brand, items, onNewConversation, footer }: SidebarProps) {
   return (
-    <aside className="h-screen w-64 shrink-0 overflow-hidden border-r border-slate-200 bg-white px-5 py-7">
+    <aside className="flex h-screen w-64 shrink-0 flex-col overflow-hidden border-r border-slate-200 bg-white px-5 py-7">
       <p className="text-lg font-semibold text-[#0A64BC]">{brand}</p>
 
       <button
@@ -36,7 +38,7 @@ export function Sidebar({ brand, items, onNewConversation }: SidebarProps) {
         New conversation
       </button>
 
-      <nav className="mt-8 space-y-1">
+      <nav className="mt-8 flex-1 space-y-1 overflow-y-auto">
         {items.map((item) => {
           if (item.type === 'divider') {
             return (
@@ -67,6 +69,8 @@ export function Sidebar({ brand, items, onNewConversation }: SidebarProps) {
           );
         })}
       </nav>
+
+      {footer ? <div className="mt-4 border-t border-slate-200 pt-4">{footer}</div> : null}
     </aside>
   );
 }
