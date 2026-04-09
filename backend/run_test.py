@@ -13,6 +13,7 @@ def main() -> int:
         "-m",
         "pytest",
         "--cov=app",
+        "--cov-branch",
         "--cov-report=term-missing",
         "--cov-report=html",
     ]

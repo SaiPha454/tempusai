@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     chat_embedding_dimension: int = 1536
     chat_sql_result_limit: int = 200
     chat_return_sql_query: bool = True
+    auth_secret_key: str = "tempusai-dev-auth-secret-change-me"
+    auth_access_token_ttl_minutes: int = 720
 
     @property
     def cors_origins_list(self) -> list[str]:
