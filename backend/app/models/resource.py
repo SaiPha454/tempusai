@@ -1,4 +1,5 @@
 from app.models.schema import (
+    AdminUser,
     Course,
     Professor,
     ProfessorAvailability,
@@ -17,6 +18,7 @@ from app.models.schema import (
 )
 
 __all__ = [
+    "AdminUser",
     "Program",
     "Course",
     "Room",

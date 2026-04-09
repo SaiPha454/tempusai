@@ -10,6 +10,10 @@ from app.core.migrations import run_startup_migrations
 openapi_tags = [
     {"name": "system", "description": "System health and service status."},
     {
+        "name": "auth",
+        "description": "Authentication and authorization for admin users.",
+    },
+    {
         "name": "resources-programs",
         "description": "Study program master data used across courses, students, and planning.",
     },

@@ -1,3 +1,4 @@
+from app.models.schema.admin_user import AdminUser
 from app.models.schema.course import Course
 from app.models.schema.professor import Professor
 from app.models.schema.professor_availability import ProfessorAvailability
@@ -15,6 +16,7 @@ from app.models.schema.student import Student
 from app.models.schema.timeslot import Timeslot
 
 __all__ = [
+    "AdminUser",
     "Program",
     "Course",
     "Room",
