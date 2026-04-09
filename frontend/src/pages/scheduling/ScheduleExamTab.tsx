@@ -1,4 +1,4 @@
-import { type RefObject } from 'react';
+import { type RefObject, useEffect, useState } from 'react';
 import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
 import clsx from 'clsx';
 import { Card } from '../../components/Card';
@@ -7,6 +7,8 @@ import { ExamDateCalendar } from '../../components/ExamDateCalendar';
 import { RoomSelector } from '../../components/RoomSelector';
 import { SelectedChipSummary } from '../../components/SelectedChipSummary';
 import { ExamSubjectItem } from '../../components/ExamSubjectItem';
+
+const ESTIMATED_EXAM_GENERATION_SECONDS = 100;
 
 type SelectOption = {
   value: string;
@@ -148,6 +150,25 @@ export function ScheduleExamTab({
   examGenerationStatusLabel,
   onGenerateExamSchedule,
 }: ScheduleExamTabProps) {
+  const [remainingSeconds, setRemainingSeconds] = useState(ESTIMATED_EXAM_GENERATION_SECONDS);
+
+  useEffect(() => {
+    if (!isGeneratingExamSchedule) {
+      setRemainingSeconds(ESTIMATED_EXAM_GENERATION_SECONDS);
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setRemainingSeconds((previous) => Math.max(0, previous - 1));
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [isGeneratingExamSchedule]);
+
+  const progressWidth = `${Math.round((remainingSeconds / ESTIMATED_EXAM_GENERATION_SECONDS) * 100)}%`;
+
   return (
     <div className="mt-6 space-y-6 pb-8">
       <Card title="Scheduling Job">
@@ -443,37 +464,34 @@ export function ScheduleExamTab({
       )}
 
       <Card title="Constraint rules">
-        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-          <p>
-            <span className="font-semibold text-slate-900">Hard constraints:</span> same program/year cannot share
-            the same day and slot, one student cannot have two exams at the same day/slot, and room capacity is
-            enforced.
-          </p>
-          <p className="mt-1">
-            <span className="font-semibold text-slate-900">Soft constraints:</span> preferred day and slot are
-            prioritized, but may be relaxed when no feasible allocation exists.
-          </p>
+        <div className="mb-2 grid gap-3 md:grid-cols-2">
+          <section className="rounded-xl border border-rose-200 bg-rose-50/60 p-4">
+            <div className="mb-2 inline-flex items-center rounded-full bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-700">
+              Hard Constraints
+            </div>
+            <p className="mb-2 text-xs text-slate-600">These rules are mandatory and cannot be violated.</p>
+            <ul className="space-y-1 text-sm text-slate-700">
+              <li>- Same program/year cannot share the same day and slot</li>
+              <li>- No student can have overlapping exams in the same day-slot</li>
+              <li>- Room capacity is strictly enforced</li>
+            </ul>
+          </section>
+
+          <section className="rounded-xl border border-sky-200 bg-sky-50/60 p-4">
+            <div className="mb-2 inline-flex items-center rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700">
+              Soft Constraints
+            </div>
+            <p className="mb-2 text-xs text-slate-600">These preferences improve quality when feasible.</p>
+            <ul className="space-y-1 text-sm text-slate-700">
+              <li>- Preferred day and timeslot are prioritized</li>
+              <li>- Preferences may be relaxed when no feasible strict assignment exists</li>
+            </ul>
+          </section>
         </div>
       </Card>
 
       <Card title="Generation Review">
         <div className="space-y-2 text-sm text-slate-700">
-          {isGeneratingExamSchedule && (
-            <div className="mb-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-3">
-              <p className="text-xs font-semibold text-sky-800">
-                {examGenerationStatusLabel ?? 'Generating on backend'}
-              </p>
-              <div className="mt-2 h-2.5 w-full rounded-full bg-sky-100">
-                <div
-                  className="h-2.5 rounded-full bg-sky-600 transition-all"
-                  style={{ width: `${Math.max(10, examGenerationProgressPercent)}%` }}
-                />
-              </div>
-              <p className="mt-2 text-xs text-sky-700">
-                Progress {examGenerationProgressPercent}% · Source: backend job status
-              </p>
-            </div>
-          )}
           <p>
             Programs selected: <span className="font-semibold text-slate-900">{examProgramPlans.length}</span>
           </p>
@@ -486,23 +504,44 @@ export function ScheduleExamTab({
           <p>
             Exam rooms selected: <span className="font-semibold text-slate-900">{globalExamSelectedRooms.length}</span>
           </p>
-          {examValidationMessage && (
-            <p className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs font-medium text-rose-700">
-              {examValidationMessage}
-            </p>
-          )}
         </div>
       </Card>
 
       <div className="flex justify-end">
-        <button
-          type="button"
-          onClick={onGenerateExamSchedule}
-          disabled={!canGenerateExamSchedule || isGeneratingExamSchedule}
-          className="rounded-xl bg-[#0A64BC] px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0959A8] active:bg-[#074B8C] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:hover:bg-slate-300"
-        >
-          {isGeneratingExamSchedule ? 'Generating Exam Schedule...' : 'Generate Exam Schedule'}
-        </button>
+        <div className="w-full max-w-sm">
+          {examValidationMessage ? (
+            <p className="mb-3 rounded-md border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs font-medium text-rose-700">
+              {examValidationMessage}
+            </p>
+          ) : null}
+
+          {isGeneratingExamSchedule ? (
+            <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-center justify-between text-xs font-medium text-slate-600">
+                <span>{examGenerationStatusLabel ?? 'Please wait, we are generating your exam schedule.'}</span>
+                <span>~{remainingSeconds}s left</span>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                <div
+                  className="h-full rounded-full bg-[#0A64BC] transition-all duration-1000 ease-linear"
+                  style={{ width: progressWidth }}
+                />
+              </div>
+              <span className="sr-only">Backend status progress {examGenerationProgressPercent}%</span>
+            </div>
+          ) : null}
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={onGenerateExamSchedule}
+              disabled={!canGenerateExamSchedule || isGeneratingExamSchedule}
+              className="rounded-xl bg-[#0A64BC] px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0959A8] active:bg-[#074B8C] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:hover:bg-slate-300"
+            >
+              {isGeneratingExamSchedule ? 'Generating Exam Schedule...' : 'Generate Exam Schedule'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

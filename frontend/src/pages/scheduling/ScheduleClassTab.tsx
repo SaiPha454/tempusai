@@ -323,17 +323,30 @@ export function ScheduleClassTab({
       </Card>
 
       <Card title="Constraint policy">
-        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-          <p>
-            <span className="font-semibold text-slate-900">Hard constraints (fixed in backend code):</span>{' '}
-            professor overlap is not allowed, same-year overlap is not allowed, room capacity must satisfy enrollment,
-            and room-timeslot collisions are not allowed.
-          </p>
-          <p className="mt-1">
-            <span className="font-semibold text-slate-900">Soft constraints (fixed in backend code):</span>{' '}
-            only professor-selected preferred timeslots are currently active. Other soft constraints are
-            temporarily turned off.
-          </p>
+        <div className="grid gap-3 md:grid-cols-2">
+          <section className="rounded-xl border border-rose-200 bg-rose-50/60 p-4">
+            <div className="mb-2 inline-flex items-center rounded-full bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-700">
+              Hard Constraints
+            </div>
+            <p className="mb-2 text-xs text-slate-600">Must always be satisfied by the scheduler.</p>
+            <ul className="space-y-1 text-sm text-slate-700">
+              <li>- No professor overlap in the same timeslot</li>
+              <li>- No overlap for courses in the same year group</li>
+              <li>- Room capacity must satisfy enrollment demand</li>
+              <li>- No room-timeslot collision</li>
+            </ul>
+          </section>
+
+          <section className="rounded-xl border border-sky-200 bg-sky-50/60 p-4">
+            <div className="mb-2 inline-flex items-center rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700">
+              Soft Constraints
+            </div>
+            <p className="mb-2 text-xs text-slate-600">Used to improve quality when multiple valid schedules exist.</p>
+            <ul className="space-y-1 text-sm text-slate-700">
+              <li>- Prefer professor-selected preferred timeslots</li>
+              <li>- Additional balancing preferences may be applied when multiple valid options are available</li>
+            </ul>
+          </section>
         </div>
       </Card>
 
@@ -348,7 +361,7 @@ export function ScheduleClassTab({
           {isGenerating ? (
             <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
               <div className="flex items-center justify-between text-xs font-medium text-slate-600">
-                <span>Scheduling in progress</span>
+                <span>Please wait, we are generating your schedule.</span>
                 <span>~{remainingSeconds}s left</span>
               </div>
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">

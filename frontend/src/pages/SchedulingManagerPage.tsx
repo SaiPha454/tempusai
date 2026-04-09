@@ -780,10 +780,10 @@ export function SchedulingManagerPage() {
 
     const normalized = (examGenerationStatus ?? 'running').toLowerCase();
     if (normalized === 'pending' || normalized === 'queued') {
-      return 'Queued in backend';
+      return 'Please wait, your scheduling job is queued.';
     }
     if (normalized === 'running') {
-      return 'Generating on backend';
+      return 'Please wait, we are generating your exam schedule.';
     }
     if (normalized === 'succeeded') {
       return 'Generation completed';
@@ -799,7 +799,7 @@ export function SchedulingManagerPage() {
       return examGenerationError;
     }
     if (!examJobName.trim()) {
-      return 'Enter scheduling job name before generation.';
+      return 'Please fill in the scheduling job name.';
     }
     if (globalExamDates.length === 0) {
       return 'Select exam period dates before generation.';
@@ -827,14 +827,14 @@ export function SchedulingManagerPage() {
   }, [examGenerationError, examJobName, examProgramPlans, globalExamDates.length, globalExamSelectedRooms.length, totalExamSubjects]);
 
   const canGenerateExamSchedule =
-    examValidationMessage === null;
+    examValidationMessage === null && examJobName.trim().length > 0;
 
   const classValidationMessage = useMemo(() => {
     if (classGenerationError) {
       return classGenerationError;
     }
     if (!classJobName.trim()) {
-      return 'Enter scheduling job name before generation.';
+      return 'Please fill in the scheduling job name.';
     }
     if (!selectedStudyProgram) {
       return 'Select a study program before generation.';
@@ -848,7 +848,7 @@ export function SchedulingManagerPage() {
     return null;
   }, [classGenerationError, classJobName, selectedProgramCourseCount, selectedRooms.length, selectedStudyProgram]);
 
-  const canGenerateClassSchedule = classValidationMessage === null;
+  const canGenerateClassSchedule = classValidationMessage === null && classJobName.trim().length > 0;
 
   const studyProgramOptionsWithCounts = useMemo(
     () =>
