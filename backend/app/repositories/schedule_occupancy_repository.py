@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.resource import Course, ScheduleClassEntry, ScheduleClassSnapshot, ScheduleExamEntry, ScheduleExamSnapshot
-from app.schemas.scheduling import ConfirmedExamOccupancyRead, ConfirmedOccupancyRead
+from app.schemas.scheduling import ConfirmedExamOccupancyRead, ConfirmedOccupancyRead, ConfirmedProfessorOccupancyRead
 
 
 class ScheduleOccupancyRepository:
@@ -93,6 +93,50 @@ class ScheduleOccupancyRepository:
             result.append(
                 ConfirmedOccupancyRead(
                     room_id=room_id,
+                    timeslot_id=timeslot_id,
+                    course_code=course_code,
+                    course_name=course_name,
+                )
+            )
+
+        return result
+
+    def list_confirmed_class_professor_occupancies(
+        self,
+        *,
+        exclude_snapshot_id: UUID,
+    ) -> list[ConfirmedProfessorOccupancyRead]:
+        stmt = (
+            select(
+                ScheduleClassEntry.professor_id,
+                ScheduleClassEntry.timeslot_id,
+                Course.code,
+                Course.name,
+            )
+            .join(ScheduleClassSnapshot, ScheduleClassSnapshot.id == ScheduleClassEntry.snapshot_id)
+            .join(Course, Course.id == ScheduleClassEntry.course_id)
+            .where(
+                ScheduleClassSnapshot.status == "confirmed",
+                ScheduleClassEntry.snapshot_id != exclude_snapshot_id,
+                ScheduleClassEntry.professor_id.is_not(None),
+                ScheduleClassEntry.timeslot_id.is_not(None),
+            )
+        )
+
+        rows = self.db.execute(stmt).all()
+        if not rows:
+            return []
+
+        seen: set[tuple[UUID, UUID]] = set()
+        result: list[ConfirmedProfessorOccupancyRead] = []
+        for professor_id, timeslot_id, course_code, course_name in rows:
+            key = (professor_id, timeslot_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(
+                ConfirmedProfessorOccupancyRead(
+                    professor_id=professor_id,
                     timeslot_id=timeslot_id,
                     course_code=course_code,
                     course_name=course_name,

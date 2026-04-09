@@ -450,16 +450,21 @@ remaining_seconds(StartTime, TotalSeconds, RemainingSeconds) :-
         RemainingSeconds is ceiling(LeftFloat)
     ).
 
-% Allocate phase budget while keeping a reserve for later phases.
-phase_budget_with_reserve(StartTime, TotalSeconds, ReserveSeconds, PhaseBudget) :-
+% Clamp requested phase budget by actual remaining total budget.
+bounded_phase_budget(StartTime, TotalSeconds, RequestedSeconds, PhaseBudget) :-
     remaining_seconds(StartTime, TotalSeconds, Remaining),
-    BudgetFloat is Remaining - ReserveSeconds,
     (
-        BudgetFloat =< 0
+        Remaining =< 0
     ->
         PhaseBudget = 0
     ;
-        PhaseBudget is ceiling(BudgetFloat)
+        (
+            Remaining < RequestedSeconds
+        ->
+            PhaseBudget = Remaining
+        ;
+            PhaseBudget = RequestedSeconds
+        )
     ).
 
 % Output format consumed by Python wrapper parser.
@@ -472,7 +477,7 @@ print_schedule :-
 % Main orchestration pipeline (fixed policy, no frontend flag branching):
 % 1) reset state
 % 2) greedy seed
-% 3) strict full search (reserve time for fallback)
+% 3) strict full search
 % 4) relaxed full search if strict is incomplete
 % 5) relaxed partial search if still incomplete
 % 6) apply and print best result
@@ -481,13 +486,14 @@ solve_and_print(TimeoutSeconds) :-
     reset_best,
     findall(Exam, exam(Exam, _, _, _), Exams),
     length(Exams, TargetCount),
-    get_time(StartTime),
 
     % Seed a quick feasible baseline so timeout still returns useful partial output.
     greedy_seed(mode(relaxed), Exams),
+    % Start phase budgeting after greedy so strict/relaxed/partial keep full configured budget.
+    get_time(StartTime),
 
     (
-        phase_budget_with_reserve(StartTime, TimeoutSeconds, 18, StrictBudget),
+        bounded_phase_budget(StartTime, TimeoutSeconds, 50, StrictBudget),
         StrictBudget > 0
     ->
         try_full_with_timeout(mode(strict), Exams, TargetCount, StrictBudget)
@@ -501,7 +507,7 @@ solve_and_print(TimeoutSeconds) :-
         true
     ;
         (
-            phase_budget_with_reserve(StartTime, TimeoutSeconds, 8, RelaxedBudget),
+            bounded_phase_budget(StartTime, TimeoutSeconds, 30, RelaxedBudget),
             RelaxedBudget > 0
         ->
             try_full_with_timeout(mode(relaxed), Exams, TargetCount, RelaxedBudget)
@@ -516,7 +522,7 @@ solve_and_print(TimeoutSeconds) :-
         true
     ;
         (
-            remaining_seconds(StartTime, TimeoutSeconds, PartialBudget),
+            bounded_phase_budget(StartTime, TimeoutSeconds, 20, PartialBudget),
             PartialBudget > 0
         ->
             try_partial_with_timeout(mode(relaxed), Exams, PartialBudget)

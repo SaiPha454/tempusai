@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal
@@ -8,6 +9,7 @@ from uuid import uuid4
 from llama_index.llms.openai import OpenAI
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.chat.guardrails import extract_sql, likely_in_scope, validate_generated_sql
 from app.chat.knowledge_index import SchedulingKnowledgeIndex
@@ -16,6 +18,9 @@ from app.chat.session_store import ChatTurn, chat_session_store
 from app.chat.schema_context import SCHEDULING_SCHEMA_CONTEXT
 from app.core.config import settings
 from app.schemas.chat import ChatAnswerRead
+
+
+logger = logging.getLogger(__name__)
 
 
 class SchedulingChatService:
@@ -47,62 +52,96 @@ class SchedulingChatService:
                 answer="Scheduling chat is not configured yet. Please set OPENAI_API_KEY on the backend.",
             )
 
-        recent_turns = chat_session_store.get_recent_turns(resolved_session_id)
+        try:
+            recent_turns = chat_session_store.get_recent_turns(resolved_session_id)
 
-        # Fast lexical pre-check before model classification to reduce irrelevant LLM usage.
-        lexical_scope = likely_in_scope(cleaned_question)
-        contextual_followup = self._is_contextual_followup(cleaned_question, recent_turns)
-        classification = self._classify_scope(cleaned_question)
-        is_in_scope = bool(classification.get("is_in_scope", lexical_scope or contextual_followup))
+            # Fast lexical pre-check before model classification to reduce irrelevant LLM usage.
+            lexical_scope = likely_in_scope(cleaned_question)
+            contextual_followup = self._is_contextual_followup(cleaned_question, recent_turns)
+            classification = self._classify_scope(cleaned_question)
+            is_in_scope = bool(classification.get("is_in_scope", lexical_scope or contextual_followup))
 
-        if not is_in_scope and contextual_followup:
-            is_in_scope = True
+            if not is_in_scope and contextual_followup:
+                is_in_scope = True
 
-        if not is_in_scope:
-            answer = self._generate_out_of_scope_reply(cleaned_question)
+            if not is_in_scope:
+                answer = self._generate_out_of_scope_reply(cleaned_question)
+                chat_session_store.append_turn(resolved_session_id, "user", cleaned_question)
+                chat_session_store.append_turn(resolved_session_id, "assistant", answer)
+                return ChatAnswerRead(
+                    session_id=resolved_session_id,
+                    status="rejected",
+                    answer=answer,
+                    scope_reason=classification.get("reason", "Question is outside scheduling scope."),
+                )
+
+            program_catalog = self._list_program_catalog()
+            semantic_context_rows = self.knowledge_index.retrieve_context(cleaned_question, top_k=3)
+            sql_query = self._generate_sql_query(
+                question=cleaned_question,
+                semantic_context_rows=semantic_context_rows,
+                recent_turns=recent_turns,
+                program_catalog=program_catalog,
+            )
+            try:
+                rows = self._execute_readonly_sql(sql_query)
+            except SQLAlchemyError as sql_error:
+                self.db.rollback()
+                repaired_query = self._generate_repair_sql_query(
+                    question=cleaned_question,
+                    recent_turns=recent_turns,
+                    program_catalog=program_catalog,
+                    previous_sql=sql_query,
+                    db_error=str(sql_error),
+                )
+                rows = self._execute_readonly_sql(repaired_query)
+                sql_query = repaired_query
+
+            if not rows:
+                fallback_query = self._generate_fallback_sql_query(
+                    question=cleaned_question,
+                    recent_turns=recent_turns,
+                    program_catalog=program_catalog,
+                    previous_sql=sql_query,
+                )
+                try:
+                    fallback_rows = self._execute_readonly_sql(fallback_query)
+                except SQLAlchemyError as sql_error:
+                    self.db.rollback()
+                    fallback_query = self._generate_repair_sql_query(
+                        question=cleaned_question,
+                        recent_turns=recent_turns,
+                        program_catalog=program_catalog,
+                        previous_sql=fallback_query,
+                        db_error=str(sql_error),
+                    )
+                    fallback_rows = self._execute_readonly_sql(fallback_query)
+                if fallback_rows:
+                    sql_query = fallback_query
+                    rows = fallback_rows
+
+            answer = self._synthesize_answer(cleaned_question, sql_query, rows, recent_turns)
             chat_session_store.append_turn(resolved_session_id, "user", cleaned_question)
             chat_session_store.append_turn(resolved_session_id, "assistant", answer)
+
+            return ChatAnswerRead(
+                session_id=resolved_session_id,
+                status="answered",
+                answer=answer,
+                row_count=len(rows),
+                sql_query=sql_query if settings.chat_return_sql_query else None,
+                rows_preview=rows[: min(5, len(rows))],
+            )
+        except Exception:
+            logger.exception("Scheduling chat request failed")
             return ChatAnswerRead(
                 session_id=resolved_session_id,
                 status="rejected",
-                answer=answer,
-                scope_reason=classification.get("reason", "Question is outside scheduling scope."),
+                answer=(
+                    "Scheduling chat is temporarily unavailable due to a backend processing issue. "
+                    "Please try again in a moment."
+                ),
             )
-
-        program_catalog = self._list_program_catalog()
-        semantic_context_rows = self.knowledge_index.retrieve_context(cleaned_question, top_k=3)
-        sql_query = self._generate_sql_query(
-            question=cleaned_question,
-            semantic_context_rows=semantic_context_rows,
-            recent_turns=recent_turns,
-            program_catalog=program_catalog,
-        )
-        rows = self._execute_readonly_sql(sql_query)
-
-        if not rows:
-            fallback_query = self._generate_fallback_sql_query(
-                question=cleaned_question,
-                recent_turns=recent_turns,
-                program_catalog=program_catalog,
-                previous_sql=sql_query,
-            )
-            fallback_rows = self._execute_readonly_sql(fallback_query)
-            if fallback_rows:
-                sql_query = fallback_query
-                rows = fallback_rows
-
-        answer = self._synthesize_answer(cleaned_question, sql_query, rows, recent_turns)
-        chat_session_store.append_turn(resolved_session_id, "user", cleaned_question)
-        chat_session_store.append_turn(resolved_session_id, "assistant", answer)
-
-        return ChatAnswerRead(
-            session_id=resolved_session_id,
-            status="answered",
-            answer=answer,
-            row_count=len(rows),
-            sql_query=sql_query if settings.chat_return_sql_query else None,
-            rows_preview=rows[: min(5, len(rows))],
-        )
 
     def _classify_scope(self, question: str) -> dict[str, Any]:
         prompt = (
@@ -158,6 +197,34 @@ class SchedulingChatService:
             f"Known program catalog (JSON):\n{json.dumps(program_catalog, ensure_ascii=False)}\n\n"
             f"Recent conversation context:\n{conversation_context}\n\n"
             f"Previous SQL that returned no rows:\n{previous_sql}\n\n"
+            f"User question:\n{question}\n"
+        )
+        response_text = self.llm.complete(prompt).text
+        sql_query = extract_sql(response_text).strip().rstrip(";")
+        validate_generated_sql(sql_query)
+        return sql_query
+
+    def _generate_repair_sql_query(
+        self,
+        question: str,
+        recent_turns: Sequence[ChatTurn],
+        program_catalog: list[dict[str, str]],
+        previous_sql: str,
+        db_error: str,
+    ) -> str:
+        conversation_context = self._format_recent_turns(recent_turns)
+        repair_instruction = (
+            "Previous SQL failed during execution. Generate a corrected SQL query using ONLY valid "
+            "tables/columns from schema context. Keep intent unchanged and avoid unsupported columns."
+        )
+        prompt = (
+            f"{self.sql_generation_prompt}\n\n"
+            f"{repair_instruction}\n\n"
+            f"Schema context:\n{SCHEDULING_SCHEMA_CONTEXT}\n\n"
+            f"Known program catalog (JSON):\n{json.dumps(program_catalog, ensure_ascii=False)}\n\n"
+            f"Recent conversation context:\n{conversation_context}\n\n"
+            f"Previous SQL that failed:\n{previous_sql}\n\n"
+            f"Database error:\n{db_error}\n\n"
             f"User question:\n{question}\n"
         )
         response_text = self.llm.complete(prompt).text

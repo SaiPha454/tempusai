@@ -4,7 +4,16 @@ from uuid import uuid4
 
 import pytest
 
-from app.models.resource import Course, Program, ProgramYearCourse, Room, ScheduleClassSnapshot, Timeslot
+from app.models.resource import (
+    Course,
+    Professor,
+    ProfessorAvailability,
+    Program,
+    ProgramYearCourse,
+    Room,
+    ScheduleClassSnapshot,
+    Timeslot,
+)
 from app.schemas.scheduling import ClassScheduleGenerateRequest, SaveClassScheduleDraftRequest
 from app.services.scheduling_service import _normalize_day
 from app.services.scheduling_service import SchedulingService
@@ -176,7 +185,7 @@ class TestSchedulingServiceOrchestration:
         assert "Available room-timeslot combinations" in str(getattr(error.value, "detail", ""))
         assert db.commit_calls == 0
 
-    def test_create_class_generation_job_rejects_when_course_has_no_valid_room_candidate(self, monkeypatch):
+    def test_create_class_generation_job_does_not_precheck_course_candidate_feasibility(self, monkeypatch):
         # Arrange
         program = Program(id=uuid4(), value="se", label="Software Engineering")
         room = Room(id=uuid4(), name="R101", capacity=20)
@@ -190,6 +199,14 @@ class TestSchedulingServiceOrchestration:
             scalar_queue=[program],
             scalars_queue=[[room], [timeslot], [row]],
         )
+        original_add = db.add
+
+        def add_with_id(value):
+            if getattr(value, "id", None) is None:
+                value.id = uuid4()
+            original_add(value)
+
+        db.add = add_with_id
         service = SchedulingService(db)
         monkeypatch.setattr(service, "_get_latest_program_snapshot", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(
@@ -203,11 +220,17 @@ class TestSchedulingServiceOrchestration:
             lambda **_kwargs: (set(), set()),
         )
 
-        class SolverMustNotRun:
-            def solve(self, **_kwargs):
-                raise AssertionError("Solver should not run when feasibility pre-check fails")
+        class CapturingSolver:
+            called = False
 
-        monkeypatch.setattr("app.services.scheduling_service.PrologClassScheduler", SolverMustNotRun)
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def solve(self, **_kwargs):
+                CapturingSolver.called = True
+                return {}
+
+        monkeypatch.setattr("app.services.scheduling_service.PrologClassScheduler", CapturingSolver)
 
         payload = ClassScheduleGenerateRequest(
             job_name="Class Capacity Infeasible",
@@ -217,14 +240,244 @@ class TestSchedulingServiceOrchestration:
             preferred_timeslot_by_course_id={},
         )
 
-        # Act / Assert
-        with pytest.raises(Exception) as error:
-            service.create_class_generation_job(payload)
+        # Act
+        result = service.create_class_generation_job(payload)
 
-        assert getattr(error.value, "status_code", None) == 400
-        assert "No valid room-timeslot candidate" in str(getattr(error.value, "detail", ""))
-        assert "CS201" in str(getattr(error.value, "detail", ""))
-        assert db.commit_calls == 0
+        # Assert
+        assert result.status == "succeeded"
+        assert CapturingSolver.called is True
+        assert db.commit_calls == 1
+
+    def test_create_class_generation_job_does_not_precheck_professor_availability_occupancy(self, monkeypatch):
+        # Arrange
+        program = Program(id=uuid4(), value="se", label="Software Engineering")
+        room = Room(id=uuid4(), name="R101", capacity=120)
+        slot_a = Timeslot(id=uuid4(), day="Monday", label="09:00 - 12:00")
+        slot_b = Timeslot(id=uuid4(), day="Tuesday", label="09:00 - 12:00")
+
+        professor = Professor(id=uuid4(), name="Prof A", is_any_time=False)
+        professor.available_timeslots = [ProfessorAvailability(professor_id=professor.id, timeslot_id=slot_a.id)]
+
+        course = Course(id=uuid4(), code="CS301", name="Operating Systems", program_id=program.id)
+        row = ProgramYearCourse(
+            id=uuid4(),
+            program_id=program.id,
+            year=3,
+            course_id=course.id,
+            professor_id=professor.id,
+        )
+        row.course = course
+        row.professor = professor
+
+        db = FakeSession(
+            scalar_queue=[program],
+            scalars_queue=[[room], [slot_a, slot_b], [row]],
+        )
+        original_add = db.add
+
+        def add_with_id(value):
+            if getattr(value, "id", None) is None:
+                value.id = uuid4()
+            original_add(value)
+
+        db.add = add_with_id
+        service = SchedulingService(db)
+        monkeypatch.setattr(service, "_get_latest_program_snapshot", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            service._demand_service,
+            "build_course_demand_map",
+            lambda **_kwargs: {(course.id, 3): 40},
+        )
+        monkeypatch.setattr(
+            service._occupancy_repository,
+            "get_confirmed_class_resource_occupancy",
+            lambda **_kwargs: (set(), {(professor.id, slot_a.id)}),
+        )
+
+        class CapturingSolver:
+            called = False
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def solve(self, **_kwargs):
+                CapturingSolver.called = True
+                return {}
+
+        monkeypatch.setattr("app.services.scheduling_service.PrologClassScheduler", CapturingSolver)
+
+        payload = ClassScheduleGenerateRequest(
+            job_name="Professor Availability Infeasible",
+            program_value="se",
+            selected_room_names=["R101"],
+            constraints={"professorNoOverlap": True},
+            preferred_timeslot_by_course_id={},
+        )
+
+        # Act
+        result = service.create_class_generation_job(payload)
+
+        # Assert
+        assert result.status == "succeeded"
+        assert CapturingSolver.called is True
+        assert db.commit_calls == 1
+
+    def test_create_class_generation_job_passes_professor_allowed_slots_to_solver(self, monkeypatch):
+        # Arrange
+        program = Program(id=uuid4(), value="se", label="Software Engineering")
+        room = Room(id=uuid4(), name="R101", capacity=120)
+        slot_a = Timeslot(id=uuid4(), day="Monday", label="09:00 - 12:00")
+        slot_b = Timeslot(id=uuid4(), day="Tuesday", label="09:00 - 12:00")
+
+        professor = Professor(id=uuid4(), name="Prof B", is_any_time=False)
+        professor.available_timeslots = [ProfessorAvailability(professor_id=professor.id, timeslot_id=slot_a.id)]
+
+        course = Course(id=uuid4(), code="CS302", name="Computer Networks", program_id=program.id)
+        row = ProgramYearCourse(
+            id=uuid4(),
+            program_id=program.id,
+            year=3,
+            course_id=course.id,
+            professor_id=professor.id,
+        )
+        row.course = course
+        row.professor = professor
+
+        db = FakeSession(
+            scalar_queue=[program],
+            scalars_queue=[[room], [slot_a, slot_b], [row]],
+        )
+        original_add = db.add
+
+        def add_with_id(value):
+            if getattr(value, "id", None) is None:
+                value.id = uuid4()
+            original_add(value)
+
+        db.add = add_with_id
+        service = SchedulingService(db)
+        monkeypatch.setattr(service, "_get_latest_program_snapshot", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            service._demand_service,
+            "build_course_demand_map",
+            lambda **_kwargs: {(course.id, 3): 35},
+        )
+        monkeypatch.setattr(
+            service._occupancy_repository,
+            "get_confirmed_class_resource_occupancy",
+            lambda **_kwargs: (set(), set()),
+        )
+
+        class CapturingSolver:
+            last_kwargs: dict | None = None
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def solve(self, **kwargs):
+                CapturingSolver.last_kwargs = kwargs
+                return {course.id: (room.id, slot_a.id)}
+
+        monkeypatch.setattr("app.services.scheduling_service.PrologClassScheduler", CapturingSolver)
+
+        payload = ClassScheduleGenerateRequest(
+            job_name="Professor Availability Enforced",
+            program_value="se",
+            selected_room_names=["R101"],
+            constraints={"professorNoOverlap": True},
+            preferred_timeslot_by_course_id={},
+        )
+
+        # Act
+        result = service.create_class_generation_job(payload)
+
+        # Assert
+        assert result.status == "succeeded"
+        assert CapturingSolver.last_kwargs is not None
+        restrictions = CapturingSolver.last_kwargs.get("professor_allowed_slot_ids_by_professor", {})
+        assert restrictions.get(professor.id) == {slot_a.id}
+
+    def test_create_class_generation_job_excludes_same_program_confirmed_occupancy(self, monkeypatch):
+        # Arrange
+        program = Program(id=uuid4(), value="se", label="Software Engineering")
+        room = Room(id=uuid4(), name="R101", capacity=120)
+        slot_a = Timeslot(id=uuid4(), day="Monday", label="09:00 - 12:00")
+        slot_b = Timeslot(id=uuid4(), day="Tuesday", label="09:00 - 12:00")
+
+        course = Course(id=uuid4(), code="CS401", name="Capstone", program_id=program.id)
+        row = ProgramYearCourse(
+            id=uuid4(),
+            program_id=program.id,
+            year=4,
+            course_id=course.id,
+            professor_id=None,
+        )
+        row.course = course
+        row.professor = None
+
+        db = FakeSession(
+            scalar_queue=[program],
+            scalars_queue=[[room], [slot_a, slot_b], [row]],
+        )
+        original_add = db.add
+
+        def add_with_id(value):
+            if getattr(value, "id", None) is None:
+                value.id = uuid4()
+            original_add(value)
+
+        db.add = add_with_id
+
+        service = SchedulingService(db)
+        monkeypatch.setattr(service, "_get_latest_program_snapshot", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            service._demand_service,
+            "build_course_demand_map",
+            lambda **_kwargs: {(course.id, 4): 30},
+        )
+
+        # Simulate one same-program occupied slot and one truly external occupied slot.
+        same_program_room_slot = (room.id, slot_a.id)
+        external_room_slot = (room.id, slot_b.id)
+        monkeypatch.setattr(
+            service._occupancy_repository,
+            "get_confirmed_class_resource_occupancy",
+            lambda **_kwargs: ({same_program_room_slot, external_room_slot}, set()),
+        )
+        monkeypatch.setattr(
+            service,
+            "_get_confirmed_occupancy_for_program",
+            lambda *_args, **_kwargs: ({same_program_room_slot}, set()),
+        )
+
+        class CapturingSolver:
+            last_kwargs: dict | None = None
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def solve(self, **kwargs):
+                CapturingSolver.last_kwargs = kwargs
+                return {course.id: (room.id, slot_a.id)}
+
+        monkeypatch.setattr("app.services.scheduling_service.PrologClassScheduler", CapturingSolver)
+
+        payload = ClassScheduleGenerateRequest(
+            job_name="Regenerate without self-conflict",
+            program_value="se",
+            selected_room_names=["R101"],
+            constraints={},
+            preferred_timeslot_by_course_id={},
+        )
+
+        # Act
+        result = service.create_class_generation_job(payload)
+
+        # Assert
+        assert result.status == "succeeded"
+        assert CapturingSolver.last_kwargs is not None
+        remaining_occupied_room_slots = CapturingSolver.last_kwargs.get("occupied_room_slots")
+        assert remaining_occupied_room_slots == {external_room_slot}
 
     def test_commit_class_draft_raises_first_validation_error(self, monkeypatch):
         # Arrange

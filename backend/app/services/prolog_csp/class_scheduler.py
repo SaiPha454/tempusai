@@ -30,6 +30,7 @@ class PrologClassScheduler:
         room_capacity_by_id: dict[UUID, int],
         timeslot_ids: list[UUID],
         preferred_timeslots_by_course_id: dict[UUID, list[UUID]],
+        professor_allowed_slot_ids_by_professor: dict[UUID, set[UUID]],
         occupied_room_slots: set[tuple[UUID, UUID]],
         occupied_professor_slots: set[tuple[UUID, UUID]],
         professor_no_overlap: bool,
@@ -50,6 +51,7 @@ class PrologClassScheduler:
                 room_capacity_by_id=room_capacity_by_id,
                 timeslot_ids=timeslot_ids,
                 preferred_timeslots_by_course_id=preferred_timeslots_by_course_id,
+                professor_allowed_slot_ids_by_professor=professor_allowed_slot_ids_by_professor,
                 occupied_room_slots=occupied_room_slots,
                 occupied_professor_slots=occupied_professor_slots,
                 professor_no_overlap=professor_no_overlap,
@@ -72,7 +74,7 @@ class PrologClassScheduler:
                     command,
                     capture_output=True,
                     text=True,
-                    timeout=max(self.timeout_seconds + 20, 25),
+                    timeout=max(self.timeout_seconds + 45, 45),
                     check=False,
                 )
             except subprocess.TimeoutExpired as error:
@@ -96,6 +98,7 @@ class PrologClassScheduler:
         room_capacity_by_id: dict[UUID, int],
         timeslot_ids: list[UUID],
         preferred_timeslots_by_course_id: dict[UUID, list[UUID]],
+        professor_allowed_slot_ids_by_professor: dict[UUID, set[UUID]],
         occupied_room_slots: set[tuple[UUID, UUID]],
         occupied_professor_slots: set[tuple[UUID, UUID]],
         professor_no_overlap: bool,
@@ -131,6 +134,12 @@ class PrologClassScheduler:
             for slot_id in slot_ids:
                 lines.append(
                     f"preferred_slot({self._atom(str(course_id))}, {self._atom(str(slot_id))})."
+                )
+
+        for professor_id, slot_ids in professor_allowed_slot_ids_by_professor.items():
+            for slot_id in slot_ids:
+                lines.append(
+                    f"professor_allowed_slot({self._atom(str(professor_id))}, {self._atom(str(slot_id))})."
                 )
 
         for room_id, timeslot_id in occupied_room_slots:

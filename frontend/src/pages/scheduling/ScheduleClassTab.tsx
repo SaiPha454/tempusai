@@ -7,7 +7,7 @@ import { RoomSelector } from '../../components/RoomSelector';
 import { SelectedChipSummary } from '../../components/SelectedChipSummary';
 import { Tabs } from '../../components/Tabs';
 
-const ESTIMATED_GENERATION_SECONDS = 45;
+const ESTIMATED_GENERATION_SECONDS = 60;
 const curriculumTabs = ['Program Curriculum', 'Professor Availability'] as const;
 
 type SelectOption = {

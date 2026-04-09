@@ -75,7 +75,7 @@ class PrologExamScheduler:
                     ],
                     capture_output=True,
                     text=True,
-                    timeout=max(self.timeout_seconds + 12, 15),
+                    timeout=max(self.timeout_seconds + 35, 35),
                     check=False,
                 )
 

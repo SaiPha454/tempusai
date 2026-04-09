@@ -1,10 +1,11 @@
 from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models.resource import (
     Course,
+    Professor,
     Program,
     ProgramYearCourse,
     Room,
@@ -22,6 +23,7 @@ from app.schemas.scheduling import (
     ClassScheduleGenerateRequest,
     ClassScheduleJobRead,
     ConfirmedOccupancyRead,
+    ConfirmedProfessorOccupancyRead,
     ProgramConfirmedScheduleSummaryRead,
     ProgramDraftSummaryRead,
     SaveClassScheduleDraftRequest,
@@ -99,7 +101,7 @@ class SchedulingService:
                 .where(ProgramYearCourse.program_id == program.id)
                 .options(
                     joinedload(ProgramYearCourse.course),
-                    joinedload(ProgramYearCourse.professor),
+                    joinedload(ProgramYearCourse.professor).selectinload(Professor.available_timeslots),
                 )
                 .order_by(ProgramYearCourse.year, ProgramYearCourse.id)
             )
@@ -112,6 +114,17 @@ class SchedulingService:
             course_year_pairs={(row.course_id, row.year) for row in plan_rows},
         )
         occupied_room_slots, occupied_professor_slots = self._occupancy_repository.get_confirmed_class_resource_occupancy()
+        # When re-generating a program, ignore its own confirmed snapshot occupancy so the
+        # solver is not blocked by the schedule it is trying to replace.
+        own_program_room_slots, own_program_professor_slots = self._get_confirmed_occupancy_for_program(program.id)
+        occupied_room_slots = occupied_room_slots - own_program_room_slots
+        occupied_professor_slots = occupied_professor_slots - own_program_professor_slots
+        all_timeslot_ids = [slot.id for slot in timeslots]
+        all_timeslot_id_set = set(all_timeslot_ids)
+        professor_allowed_slot_ids_by_professor = self._build_professor_allowed_slot_ids_by_professor(
+            plan_rows=plan_rows,
+            all_timeslot_id_set=all_timeslot_id_set,
+        )
 
         valid_course_ids = {row.course_id for row in plan_rows}
         course_id_by_plan_row_id = {row.id: row.course_id for row in plan_rows}
@@ -128,13 +141,14 @@ class SchedulingService:
             timeslots=timeslots,
             course_demand_by_pair=course_demand_by_pair,
             preferred_timeslots_by_course_id=preferred_timeslots_by_course_id,
+            professor_allowed_slot_ids_by_professor=professor_allowed_slot_ids_by_professor,
             occupied_room_slots=occupied_room_slots,
             occupied_professor_slots=occupied_professor_slots,
             constraints=payload.constraints,
         )
 
         try:
-            prolog_solver = PrologClassScheduler()
+            prolog_solver = PrologClassScheduler(timeout_seconds=60)
             prolog_assignment_by_course_id = prolog_solver.solve(
                 course_rows=[
                     PrologCourseRow(
@@ -146,8 +160,9 @@ class SchedulingService:
                     for row in plan_rows
                 ],
                 room_capacity_by_id={room.id: room.capacity for room in rooms},
-                timeslot_ids=[slot.id for slot in timeslots],
+                timeslot_ids=all_timeslot_ids,
                 preferred_timeslots_by_course_id=preferred_timeslots_by_course_id,
+                professor_allowed_slot_ids_by_professor=professor_allowed_slot_ids_by_professor,
                 occupied_room_slots=occupied_room_slots,
                 occupied_professor_slots=occupied_professor_slots,
                 professor_no_overlap=payload.constraints.get("professorNoOverlap", True),
@@ -212,6 +227,7 @@ class SchedulingService:
         timeslots: list[Timeslot],
         course_demand_by_pair: dict[tuple[UUID, int], int],
         preferred_timeslots_by_course_id: dict[UUID, list[UUID]],
+        professor_allowed_slot_ids_by_professor: dict[UUID, set[UUID]],
         occupied_room_slots: set[tuple[UUID, UUID]],
         occupied_professor_slots: set[tuple[UUID, UUID]],
         constraints: dict[str, bool],
@@ -219,9 +235,13 @@ class SchedulingService:
         if not plan_rows:
             raise bad_request("Program has no curriculum rows for scheduling")
 
-        room_capacity_check = constraints.get("roomCapacityCheck", True)
-        professor_no_overlap = constraints.get("professorNoOverlap", True)
-        student_groups_no_overlap = constraints.get("studentGroupsNoOverlap", True)
+        # Precheck scope intentionally stays minimal:
+        # only ensure global room-slot capacity can cover number of scheduling items.
+        _ = course_demand_by_pair
+        _ = preferred_timeslots_by_course_id
+        _ = professor_allowed_slot_ids_by_professor
+        _ = occupied_professor_slots
+        _ = constraints
 
         all_timeslot_ids = [slot.id for slot in timeslots]
         all_room_slot_pairs = {
@@ -240,80 +260,32 @@ class SchedulingService:
                 f"required course assignments: {len(plan_rows)}."
             )
 
-        feasible_slot_ids_by_course: dict[UUID, set[UUID]] = {}
-        zero_candidate_courses: list[str] = []
+    @staticmethod
+    def _build_professor_allowed_slot_ids_by_professor(
+        *,
+        plan_rows: list[ProgramYearCourse],
+        all_timeslot_id_set: set[UUID],
+    ) -> dict[UUID, set[UUID]]:
+        # Only keep restricted professors here; missing key means "any-time" behavior.
+        allowed_slot_ids_by_professor: dict[UUID, set[UUID]] = {}
 
         for row in plan_rows:
-            preferred_timeslot_ids = preferred_timeslots_by_course_id.get(row.course_id)
-            candidate_timeslot_ids = preferred_timeslot_ids if preferred_timeslot_ids else all_timeslot_ids
-            required_capacity = course_demand_by_pair.get((row.course_id, row.year), 0)
+            professor_id = row.professor_id
+            if professor_id is None or professor_id in allowed_slot_ids_by_professor:
+                continue
 
-            feasible_slot_ids: set[UUID] = set()
-            feasible_pair_count = 0
-            for timeslot_id in candidate_timeslot_ids:
-                if professor_no_overlap and row.professor_id and (row.professor_id, timeslot_id) in occupied_professor_slots:
-                    continue
+            professor = row.professor
+            if professor is None or getattr(professor, "is_any_time", True):
+                continue
 
-                has_room_for_slot = False
-                for room in rooms:
-                    if (room.id, timeslot_id) in occupied_room_slots:
-                        continue
-                    if room_capacity_check and required_capacity > room.capacity:
-                        continue
-                    has_room_for_slot = True
-                    feasible_pair_count += 1
+            links = getattr(professor, "available_timeslots", []) or []
+            allowed_slot_ids_by_professor[professor_id] = {
+                link.timeslot_id
+                for link in links
+                if getattr(link, "timeslot_id", None) in all_timeslot_id_set
+            }
 
-                if has_room_for_slot:
-                    feasible_slot_ids.add(timeslot_id)
-
-            feasible_slot_ids_by_course[row.id] = feasible_slot_ids
-            if feasible_pair_count == 0:
-                zero_candidate_courses.append(f"{row.course.code} (year {row.year})")
-
-        if zero_candidate_courses:
-            preview = ", ".join(zero_candidate_courses[:5])
-            if len(zero_candidate_courses) > 5:
-                preview = f"{preview}, ..."
-            raise bad_request(
-                "Scheduling is not feasible for the current class resources. "
-                f"No valid room-timeslot candidate for: {preview}."
-            )
-
-        if student_groups_no_overlap:
-            rows_by_year: dict[int, list[ProgramYearCourse]] = {}
-            for row in plan_rows:
-                rows_by_year.setdefault(row.year, []).append(row)
-
-            for year, rows in rows_by_year.items():
-                available_slots_for_year: set[UUID] = set()
-                for row in rows:
-                    available_slots_for_year.update(feasible_slot_ids_by_course.get(row.id, set()))
-                if len(available_slots_for_year) < len(rows):
-                    raise bad_request(
-                        "Scheduling is not feasible for student-group overlap constraints. "
-                        f"Year {year} has {len(rows)} courses but only {len(available_slots_for_year)} usable timeslots."
-                    )
-
-        if professor_no_overlap:
-            rows_by_professor: dict[UUID, list[ProgramYearCourse]] = {}
-            for row in plan_rows:
-                if row.professor_id is None:
-                    continue
-                rows_by_professor.setdefault(row.professor_id, []).append(row)
-
-            for rows in rows_by_professor.values():
-                if len(rows) <= 1:
-                    continue
-                available_slots_for_professor: set[UUID] = set()
-                for row in rows:
-                    available_slots_for_professor.update(feasible_slot_ids_by_course.get(row.id, set()))
-                if len(available_slots_for_professor) < len(rows):
-                    professor_name = rows[0].professor.name if rows[0].professor else "Unknown"
-                    raise bad_request(
-                        "Scheduling is not feasible for professor availability constraints. "
-                        f"Professor {professor_name} has {len(rows)} courses but only "
-                        f"{len(available_slots_for_professor)} usable timeslots."
-                    )
+        return allowed_slot_ids_by_professor
 
     def get_latest_class_draft(self, program_value: str) -> ClassScheduleDraftRead:
         program = self.db.scalar(select(Program).where(Program.value == program_value.strip()))
@@ -436,10 +408,19 @@ class SchedulingService:
     def get_class_draft(self, snapshot_id: UUID) -> ClassScheduleDraftRead:
         snapshot = self._get_snapshot(snapshot_id)
         entries_with_conflicts, conflict_count = self._serialize_entries_with_conflicts(snapshot)
+        external_room_slots, external_professor_slots = self._get_external_confirmed_resource_occupancy(
+            program_id=snapshot.program_id,
+            snapshot_id=snapshot.id,
+        )
         selected_room_ids = self._get_room_ids_by_names(snapshot.selected_room_names)
         confirmed_occupancies = self._list_confirmed_occupancies(
             exclude_snapshot_id=snapshot.id,
             room_ids=selected_room_ids,
+            allowed_room_slots=external_room_slots,
+        )
+        confirmed_professor_occupancies = self._list_confirmed_professor_occupancies(
+            exclude_snapshot_id=snapshot.id,
+            allowed_professor_slots=external_professor_slots,
         )
 
         return ClassScheduleDraftRead(
@@ -453,6 +434,7 @@ class SchedulingService:
             selected_room_names=snapshot.selected_room_names,
             entries=entries_with_conflicts,
             confirmed_occupancies=confirmed_occupancies,
+            confirmed_professor_occupancies=confirmed_professor_occupancies,
             conflict_count=conflict_count,
             created_at=snapshot.created_at,
             updated_at=snapshot.updated_at,
@@ -474,8 +456,9 @@ class SchedulingService:
 
         self._patch_service.apply_entry_patches(entry_by_id=entry_by_id, patches=payload.entries)
 
-        occupied_room_slots, occupied_professor_slots = self._occupancy_repository.get_confirmed_class_resource_occupancy(
-            exclude_snapshot_id=snapshot.id,
+        occupied_room_slots, occupied_professor_slots = self._get_external_confirmed_resource_occupancy(
+            program_id=snapshot.program_id,
+            snapshot_id=snapshot.id,
         )
 
         existing_confirmed = self.db.scalar(
@@ -539,6 +522,36 @@ class SchedulingService:
         return self.db.scalar(
             stmt.order_by(ScheduleClassSnapshot.updated_at.desc(), ScheduleClassSnapshot.created_at.desc()).limit(1)
         )
+
+    def _get_confirmed_occupancy_for_program(
+        self,
+        program_id: UUID,
+    ) -> tuple[set[tuple[UUID, UUID]], set[tuple[UUID, UUID]]]:
+        rows = self.db.execute(
+            select(
+                ScheduleClassEntry.room_id,
+                ScheduleClassEntry.professor_id,
+                ScheduleClassEntry.timeslot_id,
+            )
+            .join(ScheduleClassSnapshot, ScheduleClassSnapshot.id == ScheduleClassEntry.snapshot_id)
+            .where(
+                ScheduleClassSnapshot.status == "confirmed",
+                ScheduleClassSnapshot.program_id == program_id,
+                ScheduleClassEntry.timeslot_id.is_not(None),
+            )
+        ).all()
+
+        room_slots: set[tuple[UUID, UUID]] = set()
+        professor_slots: set[tuple[UUID, UUID]] = set()
+        for room_id, professor_id, timeslot_id in rows:
+            if not timeslot_id:
+                continue
+            if room_id:
+                room_slots.add((room_id, timeslot_id))
+            if professor_id:
+                professor_slots.add((professor_id, timeslot_id))
+
+        return room_slots, professor_slots
 
     def _serialize_entries_with_conflicts(
         self,
@@ -609,8 +622,9 @@ class SchedulingService:
         program_id: UUID,
         snapshot_id: UUID,
     ) -> dict[UUID, list[str]]:
-        occupied_room_slots, occupied_professor_slots = self._occupancy_repository.get_confirmed_class_resource_occupancy(
-            exclude_snapshot_id=snapshot_id,
+        occupied_room_slots, occupied_professor_slots = self._get_external_confirmed_resource_occupancy(
+            program_id=program_id,
+            snapshot_id=snapshot_id,
         )
 
         course_demand_by_pair = self._demand_service.build_course_demand_map(
@@ -656,6 +670,21 @@ class SchedulingService:
             exclude_snapshot_id=exclude_snapshot_id,
         )
 
+    def _get_external_confirmed_resource_occupancy(
+        self,
+        *,
+        program_id: UUID,
+        snapshot_id: UUID,
+    ) -> tuple[set[tuple[UUID, UUID]], set[tuple[UUID, UUID]]]:
+        occupied_room_slots, occupied_professor_slots = self._occupancy_repository.get_confirmed_class_resource_occupancy(
+            exclude_snapshot_id=snapshot_id,
+        )
+        own_program_room_slots, own_program_professor_slots = self._get_confirmed_occupancy_for_program(program_id)
+        return (
+            occupied_room_slots - own_program_room_slots,
+            occupied_professor_slots - own_program_professor_slots,
+        )
+
     def _get_room_ids_by_names(self, room_names: list[str]) -> set[UUID] | None:
         if not room_names:
             return None
@@ -668,14 +697,43 @@ class SchedulingService:
         *,
         exclude_snapshot_id: UUID,
         room_ids: set[UUID] | None,
+        allowed_room_slots: set[tuple[UUID, UUID]] | None = None,
     ) -> list[ConfirmedOccupancyRead]:
         if room_ids is not None and len(room_ids) == 0:
             return []
 
-        return self._occupancy_repository.list_confirmed_class_occupancies(
+        rows = self._occupancy_repository.list_confirmed_class_occupancies(
             exclude_snapshot_id=exclude_snapshot_id,
             room_ids=room_ids,
         )
+
+        if allowed_room_slots is None:
+            return rows
+
+        return [
+            row
+            for row in rows
+            if (row.room_id, row.timeslot_id) in allowed_room_slots
+        ]
+
+    def _list_confirmed_professor_occupancies(
+        self,
+        *,
+        exclude_snapshot_id: UUID,
+        allowed_professor_slots: set[tuple[UUID, UUID]] | None = None,
+    ) -> list[ConfirmedProfessorOccupancyRead]:
+        rows = self._occupancy_repository.list_confirmed_class_professor_occupancies(
+            exclude_snapshot_id=exclude_snapshot_id,
+        )
+
+        if allowed_professor_slots is None:
+            return rows
+
+        return [
+            row
+            for row in rows
+            if (row.professor_id, row.timeslot_id) in allowed_professor_slots
+        ]
 
     def _build_course_demand_map(
         self,

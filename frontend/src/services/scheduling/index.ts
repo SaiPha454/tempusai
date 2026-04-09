@@ -5,6 +5,16 @@ export {
   type RecomputeClassDraftConflictsInput,
 } from './classDraftConflictService';
 export {
+  canPlaceEntryInRoomCell,
+  canPlaceEntryInTimeCell,
+  getRoomCellConflictCodes,
+  getRoomCellUnavailableMessages,
+  getTimeCellUnavailableMessages,
+  getPlacementHintMessage,
+  type PlacementHintCode,
+  type PlacementSettings,
+} from './classPlacementHintService';
+export {
   canPlaceExamEntryInRoomCell,
   getExamRoomAvailabilityStatus,
   recomputeExamDraftConflicts,

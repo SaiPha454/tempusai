@@ -10,6 +10,7 @@
 :- dynamic time_slot/1.
 :- dynamic slot_rank/2.
 :- dynamic preferred_slot/2.
+:- dynamic professor_allowed_slot/2.
 :- dynamic reserved_room/2.
 :- dynamic reserved_prof/2.
 :- dynamic constraint_professor_no_overlap/1.
@@ -77,6 +78,11 @@ capacity_ok(Course, Room) :-
 professor_constraint_ok(Prof, Slot) :-
     (constraint_professor_no_overlap(true) -> professor_available(Prof, Slot) ; true).
 
+professor_has_slot_restriction(Prof) :- professor_allowed_slot(Prof, _).
+
+professor_availability_ok(Prof, Slot) :-
+    (professor_has_slot_restriction(Prof) -> professor_allowed_slot(Prof, Slot) ; true).
+
 year_constraint_ok(Year, Slot) :-
     (constraint_student_groups_no_overlap(true) -> year_available(Year, Slot) ; true).
 
@@ -100,6 +106,9 @@ hard_room_occupancy_ok(Room, Slot) :-
 hard_professor_overlap_ok(Prof, Slot) :-
     professor_constraint_ok(Prof, Slot).
 
+hard_professor_availability_ok(Prof, Slot) :-
+    professor_availability_ok(Prof, Slot).
+
 hard_year_overlap_ok(Year, Slot) :-
     year_constraint_ok(Year, Slot).
 
@@ -115,6 +124,7 @@ hard_constraints_ok(Course, Prof, Year, Room, Slot) :-
     hard_room_capacity_ok(Course, Room),
     hard_room_occupancy_ok(Room, Slot),
     hard_professor_overlap_ok(Prof, Slot),
+    hard_professor_availability_ok(Prof, Slot),
     hard_year_overlap_ok(Year, Slot),
     hard_not_already_scheduled_ok(Course).
 
@@ -279,6 +289,8 @@ sort_candidates_best_first(Domain, Sorted) :-
 % 2) lower current slot load
 % 3) earlier slot rank
 % 4) smaller room capacity
+% 5) room id (stability; prevents predsort from collapsing distinct options)
+% 6) slot id (final stability tie-break)
 compare_candidate(Delta, cand(_, _, Room1, Slot1, Score1), cand(_, _, Room2, Slot2, Score2)) :-
     compare(ScoreOrd, Score2, Score1),
     (
@@ -308,7 +320,23 @@ compare_candidate(Delta, cand(_, _, Room1, Slot1, Score1), cand(_, _, Room2, Slo
                             room(Room1, Cap1),
                             room(Room2, Cap2),
                             compare(CapOrd, Cap1, Cap2),
-                            Delta = CapOrd
+                            (
+                                CapOrd \= (=)
+                            ->
+                                Delta = CapOrd
+                            ;
+                                (
+                                    compare(RoomOrd, Room1, Room2),
+                                    (
+                                        RoomOrd \= (=)
+                                    ->
+                                        Delta = RoomOrd
+                                    ;
+                                        compare(SlotOrd, Slot1, Slot2),
+                                        Delta = SlotOrd
+                                    )
+                                )
+                            )
                         )
                     )
                 )
@@ -579,13 +607,14 @@ solve_and_print(TimeoutSeconds) :-
         reset_best,
         findall(Course, course(Course, _, _, _), Courses),
         length(Courses, TargetCount),
-        get_time(StartTime),
 
         % Seed quickly so timeout still returns useful partial assignments.
         greedy_seed(mode(relaxed), Courses),
+        % Start phase budgeting after greedy so strict/relaxed/partial keep full configured budget.
+        get_time(StartTime),
 
         (
-            bounded_phase_budget(StartTime, TimeoutSeconds, 25, StrictBudget),
+            bounded_phase_budget(StartTime, TimeoutSeconds, 30, StrictBudget),
             StrictBudget > 0
         ->
             try_full_with_timeout(mode(strict), Courses, TargetCount, StrictBudget)
@@ -599,7 +628,7 @@ solve_and_print(TimeoutSeconds) :-
             true
         ;
             (
-                bounded_phase_budget(StartTime, TimeoutSeconds, 12, RelaxedBudget),
+                bounded_phase_budget(StartTime, TimeoutSeconds, 20, RelaxedBudget),
                 RelaxedBudget > 0
             ->
                 try_full_with_timeout(mode(relaxed), Courses, TargetCount, RelaxedBudget)
@@ -614,7 +643,7 @@ solve_and_print(TimeoutSeconds) :-
             true
         ;
             (
-                bounded_phase_budget(StartTime, TimeoutSeconds, 8, PartialBudget),
+                bounded_phase_budget(StartTime, TimeoutSeconds, 10, PartialBudget),
                 PartialBudget > 0
             ->
                 try_partial_with_timeout(mode(relaxed), Courses, PartialBudget)
@@ -629,4 +658,4 @@ solve_and_print(TimeoutSeconds) :-
 
 solve_and_print :-
     % Default total solver budget in seconds.
-    solve_and_print(45).
+    solve_and_print(60).

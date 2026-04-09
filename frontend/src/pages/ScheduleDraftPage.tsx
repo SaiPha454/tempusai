@@ -18,9 +18,14 @@ import { useResourcesCatalog } from '../contexts/ResourcesCatalogContext';
 import {
   buildAllTimeslotsSorted,
   buildBucketRows,
+  canPlaceEntryInRoomCell as canPlaceEntryInRoomCellByRules,
+  canPlaceEntryInTimeCell as canPlaceEntryInTimeCellByRules,
   buildTimeslotsByDay,
+  getRoomCellConflictCodes,
   getClassConflictDetail,
+  getRoomCellUnavailableMessages as getRoomCellUnavailableMessagesByRules,
   getRoomAvailabilityStatus,
+  getTimeCellUnavailableMessages as getTimeCellUnavailableMessagesByRules,
   recomputeClassDraftConflicts,
   resolveEntryBucket as resolveEntryBucketFromMatrix,
   resolveEntryDay as resolveEntryDayFromMatrix,
@@ -37,7 +42,6 @@ type DraftViewTab = 'Time & Days' | 'Room-Centric';
 
 const daysOfWeek = DAYS_OF_WEEK;
 const draftViewTabs: DraftViewTab[] = ['Time & Days', 'Room-Centric'];
-
 const yearCardStyles: Record<number, { container: string; badge: string }> = {
   // Year progression palette: foundation -> growth -> specialization -> capstone
   1: {
@@ -70,7 +74,7 @@ export function ScheduleDraftPage() {
   const snapshotId = searchParams.get('snapshotId');
   const jobId = searchParams.get('jobId');
 
-  const { timeslots } = useResourcesCatalog();
+  const { timeslots, professors } = useResourcesCatalog();
 
   const [rooms, setRooms] = useState<RoomDto[]>([]);
   const [draft, setDraft] = useState<ClassScheduleDraftDto | null>(null);
@@ -141,6 +145,7 @@ export function ScheduleDraftPage() {
 
   const roomById = useMemo(() => new Map(rooms.map((room) => [room.id, room])), [rooms]);
   const timeslotById = useMemo(() => new Map(timeslots.map((slot) => [slot.id, slot])), [timeslots]);
+  const professorById = useMemo(() => new Map(professors.map((professor) => [professor.id, professor])), [professors]);
 
   const selectedRooms = useMemo(() => {
     if (!draft) {
@@ -370,55 +375,73 @@ export function ScheduleDraftPage() {
     setHoveredCellKey(null);
   };
 
+  const buildCandidateRoomIds = (entry: LocalEntry): string[] => {
+    const preferredRoomIds = [entry.room_id, ...selectableRooms.map((room) => room.id)].filter(
+      (roomId): roomId is string => Boolean(roomId),
+    );
+    return Array.from(new Set(preferredRoomIds));
+  };
+
   const canPlaceEntryInRoomCell = (entry: LocalEntry, day: string, bucket: MatrixBucket, roomId: string): boolean => {
     const targetTimeslotId = resolveTimeslotId(day, bucket);
     if (!targetTimeslotId) {
       return false;
     }
 
-    const occupiedKey = `${roomId}-${targetTimeslotId}`;
-    if (confirmedOccupancyByRoomTimeslot.has(occupiedKey)) {
-      return false;
+    return canPlaceEntryInRoomCellByRules({
+      entry,
+      targetTimeslotId,
+      roomId,
+      localEntries,
+      settings: placementSettings,
+      roomById,
+      confirmedOccupancyByRoomTimeslot,
+      confirmedOccupancyByProfessorTimeslot,
+      professorById,
+    });
+  };
+
+  const getTimeCellUnavailableMessages = (entry: LocalEntry, day: string, bucket: MatrixBucket): string[] => {
+    const targetTimeslotId = resolveTimeslotId(day, bucket);
+    if (!targetTimeslotId) {
+      return ['Not enabled in Timeslot Resources'];
     }
 
-    if (draft?.constraints.roomCapacityCheck !== false) {
-      const roomCapacity = roomById.get(roomId)?.capacity ?? 0;
-      const requiredCapacity = entry.required_capacity ?? 0;
-      if (requiredCapacity > roomCapacity) {
-        return false;
-      }
+    return getTimeCellUnavailableMessagesByRules({
+      entry,
+      targetTimeslotId,
+      candidateRoomIds: buildCandidateRoomIds(entry),
+      localEntries,
+      settings: placementSettings,
+      roomById,
+      confirmedOccupancyByRoomTimeslot,
+      confirmedOccupancyByProfessorTimeslot,
+      professorById,
+    });
+  };
+
+  const getRoomCellUnavailableMessages = (
+    entry: LocalEntry,
+    day: string,
+    bucket: MatrixBucket,
+    roomId: string,
+  ): string[] => {
+    const targetTimeslotId = resolveTimeslotId(day, bucket);
+    if (!targetTimeslotId) {
+      return ['Not enabled in Timeslot Resources'];
     }
 
-    if (draft?.constraints.professorNoOverlap !== false && entry.professor_id) {
-      const professorKey = `${entry.professor_id}-${targetTimeslotId}`;
-      if (confirmedOccupancyByProfessorTimeslot.has(professorKey)) {
-        return false;
-      }
-    }
-
-    for (const candidate of localEntries) {
-      if (candidate.id === entry.id || candidate.timeslot_id !== targetTimeslotId) {
-        continue;
-      }
-
-      if (candidate.room_id === roomId) {
-        return false;
-      }
-
-      if (
-        draft?.constraints.professorNoOverlap !== false &&
-        entry.professor_id &&
-        candidate.professor_id === entry.professor_id
-      ) {
-        return false;
-      }
-
-      if (draft?.constraints.studentGroupsNoOverlap !== false && candidate.year === entry.year) {
-        return false;
-      }
-    }
-
-    return true;
+    return getRoomCellUnavailableMessagesByRules({
+      entry,
+      targetTimeslotId,
+      roomId,
+      localEntries,
+      settings: placementSettings,
+      roomById,
+      confirmedOccupancyByRoomTimeslot,
+      confirmedOccupancyByProfessorTimeslot,
+      professorById,
+    });
   };
 
   const canDropEntryInRoomCell = (day: string, bucket: MatrixBucket, roomId: string): boolean => {
@@ -433,32 +456,53 @@ export function ScheduleDraftPage() {
   };
 
   const canPlaceEntryInTimeCell = (entry: LocalEntry, day: string, bucket: MatrixBucket): boolean => {
-    if (!resolveTimeslotId(day, bucket)) {
+    const targetTimeslotId = resolveTimeslotId(day, bucket);
+    if (!targetTimeslotId) {
       return false;
     }
 
-    const preferredRoomIds = [entry.room_id, ...selectableRooms.map((room) => room.id)].filter(
-      (roomId): roomId is string => Boolean(roomId),
-    );
-    const uniqueRoomIds = Array.from(new Set(preferredRoomIds));
-
     // Green hint means at least one room can satisfy all hard constraints at this time cell.
-    return uniqueRoomIds.some((roomId) => canPlaceEntryInRoomCell(entry, day, bucket, roomId));
+    return canPlaceEntryInTimeCellByRules({
+      entry,
+      targetTimeslotId,
+      candidateRoomIds: buildCandidateRoomIds(entry),
+      localEntries,
+      settings: placementSettings,
+      roomById,
+      confirmedOccupancyByRoomTimeslot,
+      confirmedOccupancyByProfessorTimeslot,
+      professorById,
+    });
   };
 
   const findValidRoomIdForTimeCell = (entry: LocalEntry, day: string, bucket: MatrixBucket): string | null => {
-    const preferredRoomIds = [entry.room_id, ...selectableRooms.map((room) => room.id)].filter(
-      (roomId): roomId is string => Boolean(roomId),
-    );
-
-    const uniqueRoomIds = Array.from(new Set(preferredRoomIds));
+    const uniqueRoomIds = buildCandidateRoomIds(entry);
     const strictlyValidRoomId = uniqueRoomIds.find((roomId) => canPlaceEntryInRoomCell(entry, day, bucket, roomId));
     if (strictlyValidRoomId) {
       return strictlyValidRoomId;
     }
 
-    // If no conflict-free room exists, allow staging on a room that is not blocked by committed occupancy.
-    const draftStageRoomId = uniqueRoomIds.find((roomId) => canDropEntryInRoomCell(day, bucket, roomId));
+    // If no fully conflict-free room exists, allow staging only when professor availability hard constraint still holds.
+    const targetTimeslotId = resolveTimeslotId(day, bucket);
+    if (!targetTimeslotId) {
+      return null;
+    }
+    const draftStageRoomId = uniqueRoomIds.find((roomId) => {
+      if (!canDropEntryInRoomCell(day, bucket, roomId)) {
+        return false;
+      }
+      return !getRoomCellConflictCodes({
+        entry,
+        targetTimeslotId,
+        roomId,
+        localEntries,
+        settings: placementSettings,
+        roomById,
+        confirmedOccupancyByRoomTimeslot,
+        confirmedOccupancyByProfessorTimeslot,
+        professorById,
+      }).includes('professor_unavailable');
+    });
     return draftStageRoomId ?? null;
   };
 
@@ -565,6 +609,19 @@ export function ScheduleDraftPage() {
 
   const selectableRooms = selectedRooms.length > 0 ? selectedRooms : rooms;
 
+  const placementSettings = useMemo(
+    () => ({
+      roomCapacityCheck: draft?.constraints.roomCapacityCheck !== false,
+      professorNoOverlap: draft?.constraints.professorNoOverlap !== false,
+      studentGroupsNoOverlap: draft?.constraints.studentGroupsNoOverlap !== false,
+    }),
+    [
+      draft?.constraints.professorNoOverlap,
+      draft?.constraints.roomCapacityCheck,
+      draft?.constraints.studentGroupsNoOverlap,
+    ],
+  );
+
   const getEntryRoomAvailabilityStatus = (entry: LocalEntry, roomId: string) =>
     getRoomAvailabilityStatus({
       entry,
@@ -600,7 +657,11 @@ export function ScheduleDraftPage() {
       <div
         key={entry.id}
         draggable
-        onDragStart={() => {
+        onDragStart={(event) => {
+          event.dataTransfer?.setData('text/plain', entry.id);
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = 'move';
+          }
           setDraggingEntryId(entry.id);
           setActiveConflictPopover(null);
         }}
@@ -870,8 +931,15 @@ export function ScheduleDraftPage() {
                               canPlaceEntryInTimeCell(draggingEntry as LocalEntry, day, row.key);
                             const isInvalidPlacementTarget =
                               !isUnavailableCell && Boolean(draggingEntry) && !isValidPlacementTarget;
-                            const isDroppableCell = !isUnavailableCell;
                             const cellKey = `${year}-${row.key}-${day}`;
+                            const invalidPlacementMessages =
+                              hoveredCellKey === cellKey &&
+                              !isUnavailableCell &&
+                              draggingEntry &&
+                              isInvalidPlacementTarget
+                                ? getTimeCellUnavailableMessages(draggingEntry as LocalEntry, day, row.key)
+                                : [];
+                            const isDroppableCell = !isUnavailableCell;
                             const entriesInCell = yearEntries.filter((entry) => {
                               if (!entry.timeslot_id) {
                                 return false;
@@ -918,6 +986,13 @@ export function ScheduleDraftPage() {
                                     <p className="rounded border border-slate-300 bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500">
                                       Not enabled in Timeslot Resources
                                     </p>
+                                  )}
+                                  {invalidPlacementMessages.length > 0 && (
+                                    <div className="pointer-events-none space-y-1 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-700">
+                                      {invalidPlacementMessages.map((message) => (
+                                        <p key={`${cellKey}-${message}`}>{message}</p>
+                                      ))}
+                                    </div>
                                   )}
                                   {entriesInCell.map((entry) =>
                                     renderScheduleCard(entry, { showRoom: false, enableRoomDropdown: true }),
@@ -995,8 +1070,15 @@ export function ScheduleDraftPage() {
                             canPlaceEntryInRoomCell(draggingEntry as LocalEntry, day, row.key, room.id);
                           const isInvalidPlacementTarget =
                             !isUnavailableCell && Boolean(draggingEntry) && !isValidPlacementTarget;
-                          const isDroppableCell = !isUnavailableCell;
                           const cellKey = `${room.id}-${row.key}-${day}`;
+                          const invalidPlacementMessages =
+                            hoveredCellKey === cellKey &&
+                            !isUnavailableCell &&
+                            draggingEntry &&
+                            isInvalidPlacementTarget
+                              ? getRoomCellUnavailableMessages(draggingEntry as LocalEntry, day, row.key, room.id)
+                              : [];
+                          const isDroppableCell = !isUnavailableCell;
                           const entriesInCell = localEntries.filter((entry) => {
                             if (!entry.timeslot_id || entry.room_id !== room.id) {
                               return false;
@@ -1053,6 +1135,13 @@ export function ScheduleDraftPage() {
                                       ? `Already used by ${occupiedCell.courseCode} (${occupiedCell.courseName})`
                                       : 'Not enabled in Timeslot Resources'}
                                   </p>
+                                )}
+                                {invalidPlacementMessages.length > 0 && (
+                                  <div className="pointer-events-none space-y-1 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-700">
+                                    {invalidPlacementMessages.map((message) => (
+                                      <p key={`${cellKey}-${message}`}>{message}</p>
+                                    ))}
+                                  </div>
                                 )}
                                 {entriesInCell.map((entry) => renderScheduleCard(entry, { showRoom: false, showYear: true }))}
                               </div>
