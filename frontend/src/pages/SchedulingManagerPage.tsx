@@ -173,6 +173,7 @@ export function SchedulingManagerPage() {
   const [selectedRooms, setSelectedRooms] = useState<string[]>([]);
   const [preferredTimeslotByCourseId, setPreferredTimeslotByCourseId] = useState<Record<string, string[]>>({});
   const [isGeneratingClassSchedule, setIsGeneratingClassSchedule] = useState(false);
+  const [classGenerationError, setClassGenerationError] = useState<string | null>(null);
   const [isGeneratingExamSchedule, setIsGeneratingExamSchedule] = useState(false);
   const [examGenerationError, setExamGenerationError] = useState<string | null>(null);
   const [examJobName, setExamJobName] = useState('');
@@ -402,6 +403,10 @@ export function SchedulingManagerPage() {
   const handleExamFilterChange = (field: keyof ExamFilterForm, value: string) => {
     setExamFilters((prev) => ({ ...prev, [field]: value }));
   };
+
+  useEffect(() => {
+    setClassGenerationError(null);
+  }, [classJobName, selectedStudyProgram, selectedRooms, selectedProgramCourseCount, preferredTimeslotByCourseId]);
 
   useEffect(() => {
     setExamGenerationError(null);
@@ -824,6 +829,27 @@ export function SchedulingManagerPage() {
   const canGenerateExamSchedule =
     examValidationMessage === null;
 
+  const classValidationMessage = useMemo(() => {
+    if (classGenerationError) {
+      return classGenerationError;
+    }
+    if (!classJobName.trim()) {
+      return 'Enter scheduling job name before generation.';
+    }
+    if (!selectedStudyProgram) {
+      return 'Select a study program before generation.';
+    }
+    if (selectedProgramCourseCount === 0) {
+      return 'No courses found in this program curriculum.';
+    }
+    if (selectedRooms.length === 0) {
+      return 'Select at least one room before generation.';
+    }
+    return null;
+  }, [classGenerationError, classJobName, selectedProgramCourseCount, selectedRooms.length, selectedStudyProgram]);
+
+  const canGenerateClassSchedule = classValidationMessage === null;
+
   const studyProgramOptionsWithCounts = useMemo(
     () =>
       studyProgramOptions.map((option) => {
@@ -855,12 +881,13 @@ export function SchedulingManagerPage() {
   );
 
   const handleGenerateClassSchedule = async () => {
-    if (!classJobName.trim() || !selectedStudyProgram || selectedProgramCourseCount === 0) {
+    if (classValidationMessage) {
       return;
     }
 
     try {
       setIsGeneratingClassSchedule(true);
+      setClassGenerationError(null);
       const result = await generateClassSchedule({
         job_name: classJobName.trim(),
         program_value: selectedStudyProgram,
@@ -879,6 +906,9 @@ export function SchedulingManagerPage() {
         }
         navigate(`/scheduling-draft?snapshotId=${result.snapshot_id}&jobId=${result.job_id}`);
       }
+    } catch (error) {
+      const axiosError = error as AxiosError<{ detail?: string }>;
+      setClassGenerationError(axiosError.response?.data?.detail ?? 'Failed to generate class schedule. Please try again.');
     } finally {
       setIsGeneratingClassSchedule(false);
     }
@@ -998,6 +1028,8 @@ export function SchedulingManagerPage() {
           toggleRoom={toggleRoom}
           roomCapacityMap={roomCapacityMap}
           removeRoom={removeRoom}
+          classValidationMessage={classValidationMessage}
+          canGenerateClassSchedule={canGenerateClassSchedule}
           isGenerating={isGeneratingClassSchedule}
           onGenerate={handleGenerateClassSchedule}
         />

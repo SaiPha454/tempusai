@@ -265,6 +265,157 @@ class TestExamSchedulingServiceOrchestration:
         assert entries[0].timeslot_code is None
         assert entries[0].room_id is None
 
+    def test_create_exam_generation_job_rejects_when_room_date_slots_are_insufficient(self, monkeypatch):
+        # Arrange
+        program_id = uuid4()
+        room = Room(id=uuid4(), name="R101", capacity=120)
+
+        item1 = ExamItem(
+            idx=0,
+            program_id=program_id,
+            program_value="se",
+            program_label="Software Engineering",
+            program_year_course_id=uuid4(),
+            course_id=uuid4(),
+            course_code="CS301",
+            course_name="OS",
+            year=3,
+            semester="2",
+            exam_type="final",
+            demand=40,
+            slot_candidates=[(date(2026, 5, 20), "morning-exam")],
+            preferred_slot_candidates=[],
+        )
+        item2 = ExamItem(
+            idx=1,
+            program_id=program_id,
+            program_value="se",
+            program_label="Software Engineering",
+            program_year_course_id=uuid4(),
+            course_id=uuid4(),
+            course_code="CS302",
+            course_name="Networks",
+            year=3,
+            semester="2",
+            exam_type="final",
+            demand=35,
+            slot_candidates=[(date(2026, 5, 20), "morning-exam")],
+            preferred_slot_candidates=[],
+        )
+
+        db = FakeSession(scalars_queue=[[room]])
+        service = ExamSchedulingService(db)
+        monkeypatch.setattr(service, "_list_confirmed_programs", lambda _values: [])
+        monkeypatch.setattr(service, "_build_exam_items", lambda **_kwargs: [item1, item2])
+        monkeypatch.setattr(
+            service._occupancy_repository,
+            "get_confirmed_exam_room_slots",
+            lambda **_kwargs: set(),
+        )
+
+        class SolverMustNotRun:
+            def __init__(self, timeout_seconds=100):
+                self.timeout_seconds = timeout_seconds
+
+            def solve(self, **_kwargs):
+                raise AssertionError("Solver should not run when feasibility pre-check fails")
+
+        monkeypatch.setattr("app.services.exam_scheduling_service.PrologExamScheduler", SolverMustNotRun)
+
+        payload = ExamScheduleGenerateRequest(
+            job_name="Exam Feasibility",
+            exam_dates=["2026-05-20"],
+            selected_room_names=["R101"],
+            program_plans=[
+                ExamProgramPlanRequest(program_value="se", semester="2", exam_type="final", years=[])
+            ],
+        )
+
+        # Act / Assert
+        with pytest.raises(Exception) as error:
+            service.create_exam_generation_job(payload)
+
+        assert getattr(error.value, "status_code", None) == 400
+        assert "Available room-date-slot combinations" in str(getattr(error.value, "detail", ""))
+        assert db.commit_calls == 0
+
+    def test_create_exam_generation_job_rejects_when_program_year_needs_more_distinct_slots(self, monkeypatch):
+        # Arrange
+        program_id = uuid4()
+        room1 = Room(id=uuid4(), name="R101", capacity=120)
+        room2 = Room(id=uuid4(), name="R102", capacity=120)
+
+        # Two exams in same program/year can both fit by room capacity, but only one distinct day-slot exists.
+        item1 = ExamItem(
+            idx=0,
+            program_id=program_id,
+            program_value="se",
+            program_label="Software Engineering",
+            program_year_course_id=uuid4(),
+            course_id=uuid4(),
+            course_code="CS401",
+            course_name="AI",
+            year=4,
+            semester="2",
+            exam_type="final",
+            demand=20,
+            slot_candidates=[(date(2026, 5, 21), "afternoon-exam")],
+            preferred_slot_candidates=[],
+        )
+        item2 = ExamItem(
+            idx=1,
+            program_id=program_id,
+            program_value="se",
+            program_label="Software Engineering",
+            program_year_course_id=uuid4(),
+            course_id=uuid4(),
+            course_code="CS402",
+            course_name="ML",
+            year=4,
+            semester="2",
+            exam_type="final",
+            demand=20,
+            slot_candidates=[(date(2026, 5, 21), "afternoon-exam")],
+            preferred_slot_candidates=[],
+        )
+
+        db = FakeSession(scalars_queue=[[room1, room2]])
+        service = ExamSchedulingService(db)
+        monkeypatch.setattr(service, "_list_confirmed_programs", lambda _values: [])
+        monkeypatch.setattr(service, "_build_exam_items", lambda **_kwargs: [item1, item2])
+        monkeypatch.setattr(
+            service._occupancy_repository,
+            "get_confirmed_exam_room_slots",
+            lambda **_kwargs: set(),
+        )
+
+        class SolverMustNotRun:
+            def __init__(self, timeout_seconds=100):
+                self.timeout_seconds = timeout_seconds
+
+            def solve(self, **_kwargs):
+                raise AssertionError("Solver should not run when feasibility pre-check fails")
+
+        monkeypatch.setattr("app.services.exam_scheduling_service.PrologExamScheduler", SolverMustNotRun)
+
+        payload = ExamScheduleGenerateRequest(
+            job_name="Exam Program-Year Feasibility",
+            exam_dates=["2026-05-21"],
+            selected_room_names=["R101", "R102"],
+            program_plans=[
+                ExamProgramPlanRequest(program_value="se", semester="2", exam_type="final", years=[])
+            ],
+        )
+
+        # Act / Assert
+        with pytest.raises(Exception) as error:
+            service.create_exam_generation_job(payload)
+
+        assert getattr(error.value, "status_code", None) == 400
+        assert "same-year overlap constraints" in str(getattr(error.value, "detail", ""))
+        assert "Program se year 4" in str(getattr(error.value, "detail", ""))
+        assert db.commit_calls == 0
+
     def test_commit_exam_draft_rejects_unassigned_entries(self, monkeypatch):
         # Arrange
         snapshot = ScheduleExamSnapshot(

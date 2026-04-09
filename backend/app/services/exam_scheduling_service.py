@@ -139,6 +139,13 @@ class ExamSchedulingService:
         confirmed_exam_room_slots = self._occupancy_repository.get_confirmed_exam_room_slots()
         student_overlap_edges = self._build_student_overlap_edges(items) if constraints["no_student_overlap"] else defaultdict(set)
 
+        self._ensure_exam_generation_feasible(
+            items=items,
+            rooms=rooms,
+            confirmed_exam_room_slots=confirmed_exam_room_slots,
+            constraints=constraints,
+        )
+
         slot_keys_by_idx: dict[int, list[str]] = {
             item.idx: [f"{slot_date.isoformat()}|{slot_code}" for slot_date, slot_code in item.slot_candidates]
             for item in items
@@ -241,6 +248,81 @@ class ExamSchedulingService:
         self.db.commit()
 
         return ExamScheduleJobRead(job_id=job.id, snapshot_id=snapshot.id, status=job.status)
+
+    def _ensure_exam_generation_feasible(
+        self,
+        *,
+        items: list[ExamItem],
+        rooms: list[Room],
+        confirmed_exam_room_slots: set[tuple[UUID, date, str]],
+        constraints: dict[str, bool],
+    ) -> None:
+        if not items:
+            raise bad_request("No exam subjects were provided for generation")
+
+        room_capacity_check = constraints.get("room_capacity_check", True)
+        no_same_program_year_day_timeslot = constraints.get("no_same_program_year_day_timeslot", True)
+
+        feasible_room_slots_by_item: dict[int, set[tuple[UUID, date, str]]] = {}
+        feasible_day_slot_by_item: dict[int, set[tuple[date, str]]] = {}
+        zero_candidate_items: list[str] = []
+
+        for item in items:
+            feasible_pairs: set[tuple[UUID, date, str]] = set()
+            feasible_day_slots: set[tuple[date, str]] = set()
+            for exam_date, slot_code in item.slot_candidates:
+                has_any_room = False
+                for room in rooms:
+                    room_slot = (room.id, exam_date, slot_code)
+                    if room_slot in confirmed_exam_room_slots:
+                        continue
+                    if room_capacity_check and item.demand > room.capacity:
+                        continue
+                    feasible_pairs.add(room_slot)
+                    has_any_room = True
+                if has_any_room:
+                    feasible_day_slots.add((exam_date, slot_code))
+
+            feasible_room_slots_by_item[item.idx] = feasible_pairs
+            feasible_day_slot_by_item[item.idx] = feasible_day_slots
+            if not feasible_pairs:
+                zero_candidate_items.append(f"{item.program_value}-Y{item.year} {item.course_code}")
+
+        if zero_candidate_items:
+            preview = ", ".join(zero_candidate_items[:5])
+            if len(zero_candidate_items) > 5:
+                preview = f"{preview}, ..."
+            raise bad_request(
+                "Exam scheduling is not feasible with the selected dates/rooms. "
+                f"No valid room-date-slot candidate for: {preview}."
+            )
+
+        all_feasible_room_slots = set().union(*feasible_room_slots_by_item.values())
+        if len(all_feasible_room_slots) < len(items):
+            raise bad_request(
+                "Exam scheduling is not feasible with the selected resources. "
+                f"Available room-date-slot combinations: {len(all_feasible_room_slots)}, "
+                f"required exam assignments: {len(items)}."
+            )
+
+        if no_same_program_year_day_timeslot:
+            items_by_program_year: dict[tuple[UUID, int], list[ExamItem]] = defaultdict(list)
+            for item in items:
+                items_by_program_year[(item.program_id, item.year)].append(item)
+
+            for (_, year), group_items in items_by_program_year.items():
+                required_slots = len(group_items)
+                feasible_slots: set[tuple[date, str]] = set()
+                for item in group_items:
+                    feasible_slots.update(feasible_day_slot_by_item.get(item.idx, set()))
+
+                if len(feasible_slots) < required_slots:
+                    program_value = group_items[0].program_value
+                    raise bad_request(
+                        "Exam scheduling is not feasible for same-year overlap constraints. "
+                        f"Program {program_value} year {year} has {required_slots} exams but only "
+                        f"{len(feasible_slots)} usable day-slot combinations."
+                    )
 
     def get_job(self, job_id: UUID) -> ExamScheduleJobRead:
         job = self.db.get(ScheduleGenerationJob, job_id)

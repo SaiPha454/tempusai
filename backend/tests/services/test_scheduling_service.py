@@ -121,6 +121,111 @@ class TestSchedulingServiceOrchestration:
         assert getattr(error.value, "status_code", None) == 400
         assert "Unable to generate schedule using Prolog CSP solver" in str(getattr(error.value, "detail", ""))
 
+    def test_create_class_generation_job_rejects_when_available_room_slots_are_insufficient(self, monkeypatch):
+        # Arrange
+        program = Program(id=uuid4(), value="se", label="Software Engineering")
+        room = Room(id=uuid4(), name="R101", capacity=120)
+        timeslot = Timeslot(id=uuid4(), day="Monday", label="09:00 - 12:00")
+
+        course1 = Course(id=uuid4(), code="CS101", name="Intro Programming", program_id=program.id)
+        course2 = Course(id=uuid4(), code="CS102", name="Discrete Math", program_id=program.id)
+
+        row1 = ProgramYearCourse(id=uuid4(), program_id=program.id, year=1, course_id=course1.id, professor_id=None)
+        row2 = ProgramYearCourse(id=uuid4(), program_id=program.id, year=1, course_id=course2.id, professor_id=None)
+        row1.course = course1
+        row2.course = course2
+        row1.professor = None
+        row2.professor = None
+
+        db = FakeSession(
+            scalar_queue=[program],
+            scalars_queue=[[room], [timeslot], [row1, row2]],
+        )
+        service = SchedulingService(db)
+        monkeypatch.setattr(service, "_get_latest_program_snapshot", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            service._demand_service,
+            "build_course_demand_map",
+            lambda **_kwargs: {(course1.id, 1): 30, (course2.id, 1): 25},
+        )
+        monkeypatch.setattr(
+            service._occupancy_repository,
+            "get_confirmed_class_resource_occupancy",
+            lambda **_kwargs: (set(), set()),
+        )
+
+        class SolverMustNotRun:
+            def solve(self, **_kwargs):
+                raise AssertionError("Solver should not run when feasibility pre-check fails")
+
+        monkeypatch.setattr("app.services.scheduling_service.PrologClassScheduler", SolverMustNotRun)
+
+        payload = ClassScheduleGenerateRequest(
+            job_name="Class Feasibility",
+            program_value="se",
+            selected_room_names=["R101"],
+            constraints={},
+            preferred_timeslot_by_course_id={},
+        )
+
+        # Act / Assert
+        with pytest.raises(Exception) as error:
+            service.create_class_generation_job(payload)
+
+        assert getattr(error.value, "status_code", None) == 400
+        assert "Available room-timeslot combinations" in str(getattr(error.value, "detail", ""))
+        assert db.commit_calls == 0
+
+    def test_create_class_generation_job_rejects_when_course_has_no_valid_room_candidate(self, monkeypatch):
+        # Arrange
+        program = Program(id=uuid4(), value="se", label="Software Engineering")
+        room = Room(id=uuid4(), name="R101", capacity=20)
+        timeslot = Timeslot(id=uuid4(), day="Monday", label="09:00 - 12:00")
+        course = Course(id=uuid4(), code="CS201", name="Algorithms", program_id=program.id)
+        row = ProgramYearCourse(id=uuid4(), program_id=program.id, year=2, course_id=course.id, professor_id=None)
+        row.course = course
+        row.professor = None
+
+        db = FakeSession(
+            scalar_queue=[program],
+            scalars_queue=[[room], [timeslot], [row]],
+        )
+        service = SchedulingService(db)
+        monkeypatch.setattr(service, "_get_latest_program_snapshot", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            service._demand_service,
+            "build_course_demand_map",
+            lambda **_kwargs: {(course.id, 2): 120},
+        )
+        monkeypatch.setattr(
+            service._occupancy_repository,
+            "get_confirmed_class_resource_occupancy",
+            lambda **_kwargs: (set(), set()),
+        )
+
+        class SolverMustNotRun:
+            def solve(self, **_kwargs):
+                raise AssertionError("Solver should not run when feasibility pre-check fails")
+
+        monkeypatch.setattr("app.services.scheduling_service.PrologClassScheduler", SolverMustNotRun)
+
+        payload = ClassScheduleGenerateRequest(
+            job_name="Class Capacity Infeasible",
+            program_value="se",
+            selected_room_names=["R101"],
+            constraints={},
+            preferred_timeslot_by_course_id={},
+        )
+
+        # Act / Assert
+        with pytest.raises(Exception) as error:
+            service.create_class_generation_job(payload)
+
+        assert getattr(error.value, "status_code", None) == 400
+        assert "No valid room-timeslot candidate" in str(getattr(error.value, "detail", ""))
+        assert "CS201" in str(getattr(error.value, "detail", ""))
+        assert db.commit_calls == 0
+
     def test_commit_class_draft_raises_first_validation_error(self, monkeypatch):
         # Arrange
         snapshot = ScheduleClassSnapshot(

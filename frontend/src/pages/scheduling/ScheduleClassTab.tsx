@@ -47,6 +47,8 @@ type ScheduleClassTabProps = {
   toggleRoom: (room: string) => void;
   roomCapacityMap: Record<string, number>;
   removeRoom: (room: string) => void;
+  classValidationMessage: string | null;
+  canGenerateClassSchedule: boolean;
   isGenerating: boolean;
   onGenerate: () => void;
 };
@@ -70,6 +72,8 @@ export function ScheduleClassTab({
   toggleRoom,
   roomCapacityMap,
   removeRoom,
+  classValidationMessage,
+  canGenerateClassSchedule,
   isGenerating,
   onGenerate,
 }: ScheduleClassTabProps) {
@@ -335,6 +339,12 @@ export function ScheduleClassTab({
 
       <div className="flex justify-end">
         <div className="w-full max-w-sm">
+          {classValidationMessage ? (
+            <p className="mb-3 rounded-md border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs font-medium text-rose-700">
+              {classValidationMessage}
+            </p>
+          ) : null}
+
           {isGenerating ? (
             <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
               <div className="flex items-center justify-between text-xs font-medium text-slate-600">
@@ -354,12 +364,7 @@ export function ScheduleClassTab({
             <button
               type="button"
               onClick={onGenerate}
-              disabled={
-                isGenerating ||
-                classJobName.trim().length === 0 ||
-                selectedRooms.length === 0 ||
-                selectedProgramCourseCount === 0
-              }
+              disabled={!canGenerateClassSchedule || isGenerating}
               className="rounded-xl bg-[#0A64BC] px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0959A8] active:bg-[#074B8C] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:hover:bg-slate-300"
             >
               {isGenerating ? 'Generating...' : 'Generate Schedule'}

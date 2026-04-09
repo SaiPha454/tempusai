@@ -122,6 +122,17 @@ class SchedulingService:
             course_id_by_plan_row_id=course_id_by_plan_row_id,
         )
 
+        self._ensure_class_generation_feasible(
+            plan_rows=plan_rows,
+            rooms=rooms,
+            timeslots=timeslots,
+            course_demand_by_pair=course_demand_by_pair,
+            preferred_timeslots_by_course_id=preferred_timeslots_by_course_id,
+            occupied_room_slots=occupied_room_slots,
+            occupied_professor_slots=occupied_professor_slots,
+            constraints=payload.constraints,
+        )
+
         try:
             prolog_solver = PrologClassScheduler()
             prolog_assignment_by_course_id = prolog_solver.solve(
@@ -192,6 +203,117 @@ class SchedulingService:
         self.db.commit()
 
         return ClassScheduleJobRead(job_id=job.id, snapshot_id=snapshot.id, status=job.status)
+
+    def _ensure_class_generation_feasible(
+        self,
+        *,
+        plan_rows: list[ProgramYearCourse],
+        rooms: list[Room],
+        timeslots: list[Timeslot],
+        course_demand_by_pair: dict[tuple[UUID, int], int],
+        preferred_timeslots_by_course_id: dict[UUID, list[UUID]],
+        occupied_room_slots: set[tuple[UUID, UUID]],
+        occupied_professor_slots: set[tuple[UUID, UUID]],
+        constraints: dict[str, bool],
+    ) -> None:
+        if not plan_rows:
+            raise bad_request("Program has no curriculum rows for scheduling")
+
+        room_capacity_check = constraints.get("roomCapacityCheck", True)
+        professor_no_overlap = constraints.get("professorNoOverlap", True)
+        student_groups_no_overlap = constraints.get("studentGroupsNoOverlap", True)
+
+        all_timeslot_ids = [slot.id for slot in timeslots]
+        all_room_slot_pairs = {
+            (room.id, timeslot_id)
+            for room in rooms
+            for timeslot_id in all_timeslot_ids
+        }
+        available_room_slot_pairs = {
+            pair for pair in all_room_slot_pairs if pair not in occupied_room_slots
+        }
+
+        if len(available_room_slot_pairs) < len(plan_rows):
+            raise bad_request(
+                "Scheduling is not feasible with selected resources. "
+                f"Available room-timeslot combinations: {len(available_room_slot_pairs)}, "
+                f"required course assignments: {len(plan_rows)}."
+            )
+
+        feasible_slot_ids_by_course: dict[UUID, set[UUID]] = {}
+        zero_candidate_courses: list[str] = []
+
+        for row in plan_rows:
+            preferred_timeslot_ids = preferred_timeslots_by_course_id.get(row.course_id)
+            candidate_timeslot_ids = preferred_timeslot_ids if preferred_timeslot_ids else all_timeslot_ids
+            required_capacity = course_demand_by_pair.get((row.course_id, row.year), 0)
+
+            feasible_slot_ids: set[UUID] = set()
+            feasible_pair_count = 0
+            for timeslot_id in candidate_timeslot_ids:
+                if professor_no_overlap and row.professor_id and (row.professor_id, timeslot_id) in occupied_professor_slots:
+                    continue
+
+                has_room_for_slot = False
+                for room in rooms:
+                    if (room.id, timeslot_id) in occupied_room_slots:
+                        continue
+                    if room_capacity_check and required_capacity > room.capacity:
+                        continue
+                    has_room_for_slot = True
+                    feasible_pair_count += 1
+
+                if has_room_for_slot:
+                    feasible_slot_ids.add(timeslot_id)
+
+            feasible_slot_ids_by_course[row.id] = feasible_slot_ids
+            if feasible_pair_count == 0:
+                zero_candidate_courses.append(f"{row.course.code} (year {row.year})")
+
+        if zero_candidate_courses:
+            preview = ", ".join(zero_candidate_courses[:5])
+            if len(zero_candidate_courses) > 5:
+                preview = f"{preview}, ..."
+            raise bad_request(
+                "Scheduling is not feasible for the current class resources. "
+                f"No valid room-timeslot candidate for: {preview}."
+            )
+
+        if student_groups_no_overlap:
+            rows_by_year: dict[int, list[ProgramYearCourse]] = {}
+            for row in plan_rows:
+                rows_by_year.setdefault(row.year, []).append(row)
+
+            for year, rows in rows_by_year.items():
+                available_slots_for_year: set[UUID] = set()
+                for row in rows:
+                    available_slots_for_year.update(feasible_slot_ids_by_course.get(row.id, set()))
+                if len(available_slots_for_year) < len(rows):
+                    raise bad_request(
+                        "Scheduling is not feasible for student-group overlap constraints. "
+                        f"Year {year} has {len(rows)} courses but only {len(available_slots_for_year)} usable timeslots."
+                    )
+
+        if professor_no_overlap:
+            rows_by_professor: dict[UUID, list[ProgramYearCourse]] = {}
+            for row in plan_rows:
+                if row.professor_id is None:
+                    continue
+                rows_by_professor.setdefault(row.professor_id, []).append(row)
+
+            for rows in rows_by_professor.values():
+                if len(rows) <= 1:
+                    continue
+                available_slots_for_professor: set[UUID] = set()
+                for row in rows:
+                    available_slots_for_professor.update(feasible_slot_ids_by_course.get(row.id, set()))
+                if len(available_slots_for_professor) < len(rows):
+                    professor_name = rows[0].professor.name if rows[0].professor else "Unknown"
+                    raise bad_request(
+                        "Scheduling is not feasible for professor availability constraints. "
+                        f"Professor {professor_name} has {len(rows)} courses but only "
+                        f"{len(available_slots_for_professor)} usable timeslots."
+                    )
 
     def get_latest_class_draft(self, program_value: str) -> ClassScheduleDraftRead:
         program = self.db.scalar(select(Program).where(Program.value == program_value.strip()))
