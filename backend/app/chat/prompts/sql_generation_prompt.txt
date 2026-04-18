@@ -11,8 +11,13 @@ Core rules:
 5) Never use `SELECT *`; project explicit columns.
 6) Prefer explicit JOINs and clear aliases.
 7) Add `LIMIT` for potentially large result sets unless aggregate-only query.
-8) Follow relationship graph and canonical join recipes from Schema context before inventing any join path.
-9) Every JOIN condition must be a valid two-sided key relationship (no chained equality expressions).
+8) When using `LIMIT`, choose an adaptive, context-preserving size based on runtime conditions and question intent.
+	- Avoid tiny limits that can hide relevant evidence.
+	- For detail/diagnostic/timetable questions, use a sufficiently large limit to preserve context.
+	- If uncertainty is high or scope may be broad, prefer two-step retrieval: first a compact aggregate/count, then a larger detail query.
+9) Every `LIMIT` must be paired with a meaningful `ORDER BY` so the returned subset is deterministic and context-representative.
+10) Follow relationship graph and canonical join recipes from Schema context before inventing any join path.
+11) Every JOIN condition must be a valid two-sided key relationship (no chained equality expressions).
 
 Reasoning workflow (apply in order):
 1) Detect intent type: metric/count, list, timetable/detail, comparison, or diagnostic.
@@ -28,14 +33,15 @@ Scheduling-specific guidance:
 4) For ambiguous "time schedule" follow-ups, preserve prior domain (exam vs class) from the conversation.
 5) For "how many" questions, return compact aggregates and include useful labels when feasible.
 6) Avoid grouping/distinct directly on JSON fields; extract scalar values first when needed.
-7) For user typos in entity names, use robust case-insensitive matching (e.g., token-based ILIKE strategy).
-8) For class day-of-week questions (e.g., Monday), filter via `timeslots.day` after joining `schedule_class_entries -> timeslots`.
-9) Normalize full weekday names to stored short tokens when filtering `timeslots.day`:
+7) For question types that can hide important evidence when truncated (conflict diagnostics, timetable detail, anomaly checks), prefer larger adaptive limits based on runtime conditions.
+8) For user typos in entity names, use robust case-insensitive matching (e.g., token-based ILIKE strategy).
+9) For class day-of-week questions (e.g., Monday), filter via `timeslots.day` after joining `schedule_class_entries -> timeslots`.
+10) Normalize full weekday names to stored short tokens when filtering `timeslots.day`:
 	Monday->`Mon%`, Tuesday->`Tue%`, Wednesday->`Wed%`, Thursday->`Thu%`, Friday->`Fri%`, Saturday->`Sat%`, Sunday->`Sun%`.
 	Prefer `ILIKE '<token>%` for robustness.
-10) For exam day-of-week questions, derive weekday from `schedule_exam_entries.exam_date` (e.g., `EXTRACT(DOW FROM see.exam_date)`).
-11) To map exam rows to professors, go through `schedule_exam_entries.program_year_course_id -> program_year_courses.professor_id`.
-12) Never join `professors` directly to `schedule_exam_entries.program_id`.
+11) For exam day-of-week questions, derive weekday from `schedule_exam_entries.exam_date` (e.g., `EXTRACT(DOW FROM see.exam_date)`).
+12) To map exam rows to professors, go through `schedule_exam_entries.program_year_course_id -> program_year_courses.professor_id`.
+13) Never join `professors` directly to `schedule_exam_entries.program_id`.
 
 Output format:
 1) Return SQL only.
