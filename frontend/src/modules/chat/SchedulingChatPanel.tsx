@@ -106,6 +106,7 @@ export function SchedulingChatPanel() {
           status: response.status,
           rowCount: response.row_count ?? null,
           sqlQuery: response.sql_query ?? null,
+          presentation: response.presentation ?? null,
         },
       };
       setMessages((prev) => [...prev, assistantMessage]);

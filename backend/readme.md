@@ -89,6 +89,7 @@ Response includes:
 
 - `status` (`answered` or `rejected`)
 - `answer`
+- optional `presentation` payload for dynamic UI rendering (LLM-decided style + structured blocks)
 - optional SQL/debug fields (`sql_query`, `rows_preview`, `row_count`) based on settings
 
 Chat setup requirements:

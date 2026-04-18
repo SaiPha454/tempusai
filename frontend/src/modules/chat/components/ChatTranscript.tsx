@@ -1,4 +1,5 @@
 import type { ChatMessage } from '../types';
+import { DynamicChatResponse } from './DynamicChatResponse';
 
 type ChatTranscriptProps = {
   messages: ChatMessage[];
@@ -29,7 +30,7 @@ export function ChatTranscript({ messages, isThinking }: ChatTranscriptProps) {
             </div>
           ) : (
             <div className="w-full rounded-xl border border-slate-200 bg-white/80 px-4 py-3 text-sm text-slate-800 shadow-sm">
-              <p className="whitespace-pre-wrap leading-7">{message.content}</p>
+              <DynamicChatResponse answer={message.content} />
               {message.meta?.rowCount != null && (
                 <p className="mt-2 text-xs text-slate-500">Rows scanned: {message.meta.rowCount}</p>
               )}
